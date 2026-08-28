@@ -1,0 +1,16 @@
+{
+  "short_name": "정산관리",
+  "name": "일일 사무실 정산 관리 시스템",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2652/2652218.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#1c1917",
+  "background_color": "#f8f5f2"
+}

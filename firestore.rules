@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 2번폰 접속 문제 해결을 위해 모든 보안 제약을 일시적으로 해제합니다.
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

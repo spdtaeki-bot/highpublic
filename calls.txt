@@ -1,0 +1,456 @@
+68:  const date = ts.toDate ? ts.toDate() : new Date(ts);
+104:  render() {
+117:              onClick={() => window.location.reload()}
+123:              onClick={() => {
+124:                localStorage.clear();
+126:                  navigator.serviceWorker.getRegistrations().then(registrations => {
+128:                      registration.unregister();
+132:                window.location.reload();
+142:              <p className="text-xs font-mono text-stone-600">{this.state.error.toString()}</p>
+153:export default function App() {
+154:  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+158:  const [loading, setLoading] = useState(() => {
+164:  useEffect(() => {
+167:      timer = setTimeout(() => setShowLoadingUI(true), 300); // 300ms delay
+171:    return () => clearTimeout(timer);
+182:  const [selectedDate, setSelectedDate] = useState(() => {
+186:    const now = new Date();
+188:    if (now.getHours() < 12) {
+193:  const [isFormOpen, setIsFormOpen] = useState(() => {
+196:  const [isStaffModalOpen, setIsStaffModalOpen] = useState(() => {
+203:  }>(() => {
+208:  const [statusModal, setStatusModal] = useState<{ type: 'TOTAL' | 'WORKING' | 'WAITING' | 'FINISHED' | 'OFF_DUTY', isOpen: boolean }>(() => {
+219:  const [editingRecord, setEditingRecord] = useState<DispatchRecord | null>(() => {
+239:  const [preSelectedStaffNames, setPreSelectedStaffNames] = useState<string[]>(() => {
+244:  const [viewMode, setViewMode] = useState<'list' | 'timeline'>(() => {
+249:  const [currentTime, setCurrentTime] = useState(new Date());
+254:  useEffect(() => {
+258:      timeoutId = setTimeout(() => {
+263:    return () => {
+268:  useEffect(() => {
+269:    const timer = setInterval(() => setCurrentTime(new Date()), 60000);
+270:    return () => clearInterval(timer);
+273:  useEffect(() => {
+275:      e.preventDefault();
+281:  const handleInstallClick = async () => {
+293:      deferredPrompt.prompt();
+319:  useEffect(() => {
+323:  useEffect(() => {
+327:  useEffect(() => {
+331:  useEffect(() => {
+336:  useEffect(() => {
+340:  useEffect(() => {
+344:  useEffect(() => {
+352:  useEffect(() => {
+357:  useEffect(() => {
+358:    const handleScroll = () => {
+362:    return () => window.removeEventListener('scroll', handleScroll);
+365:  useEffect(() => {
+374:  useEffect(() => {
+375:    testConnection().catch(() => {});
+378:  useEffect(() => {
+402:      return () => {
+403:        unsubDispatches();
+404:        unsubAttendance();
+409:  useEffect(() => {
+431:      return () => {
+432:        unsubAllUnpaid();
+433:        unsubUnpaidStaff();
+434:        unsubStaff();
+435:        unsubEstablishments();
+441:    e.preventDefault();
+452:  const handleLogout = () => {
+457:  useEffect(() => {
+470:    return () => {
+476:  useEffect(() => {
+478:    const handleVisibilityChange = () => {
+481:        testConnection().catch(() => {});
+487:    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+490:  useEffect(() => {
+493:    const pingServer = () => {
+494:      fetch('/').catch(() => {});
+495:      testConnection().catch(() => {});
+498:    pingServer();
+500:    return () => clearInterval(keepAlive);
+504:  const stats = useMemo(() => {
+530:      const start = r.startTime.toDate ? r.startTime.toDate() : new Date(r.startTime);
+531:      const end = r.endTime.toDate ? r.endTime.toDate() : new Date(r.endTime);
+532:      return start.getTime() !== end.getTime(); // Only finished dispatches
+552:  const activeStaffStats = useMemo(() => {
+577:      const start = r.startTime.toDate ? r.startTime.toDate() : new Date(r.startTime);
+578:      const end = r.endTime.toDate ? r.endTime.toDate() : new Date(r.endTime);
+579:      return start.getTime() === end.getTime();
+587:  const waitingStaffNames = useMemo(() => {
+589:      const start = r.startTime.toDate ? r.startTime.toDate() : new Date(r.startTime);
+590:      const end = r.endTime.toDate ? r.endTime.toDate() : new Date(r.endTime);
+591:      return start.getTime() === end.getTime();
+600:      (e.currentTarget as HTMLElement).blur();
+601:      e.preventDefault();
+602:      e.stopPropagation();
+615:        newOffTimes[staffId] = Timestamp.now();
+627:      (e.currentTarget as HTMLElement).blur();
+628:      e.preventDefault();
+629:      e.stopPropagation();
+700:              onClick={() => window.location.reload()}
+706:              onClick={() => {
+707:                localStorage.clear();
+709:                  navigator.serviceWorker.getRegistrations().then(registrations => {
+711:                      registration.unregister();
+715:                window.location.reload();
+802:              onClick={() => setIsStaffModalOpen(true)}
+812:                  e.preventDefault();
+813:                  e.stopPropagation();
+825:                  e.preventDefault();
+828:                      (dateInputRef.current as any).showPicker();
+830:                      dateInputRef.current?.click();
+833:                    dateInputRef.current?.click();
+856:                  e.preventDefault();
+857:                  e.stopPropagation();
+870:                e.preventDefault();
+871:                setSelectedDate(format(new Date(), 'yyyy-MM-dd'));
+897:              onClick={() => window.location.reload()}
+923:            onClick={() => setDetailModal({ type: 'revenue', isOpen: true })}
+939:            onClick={() => setDetailModal({ type: 'commission', isOpen: true })}
+957:            onClick={() => setDetailModal({ type: 'staffPayment', isOpen: true })}
+973:            onClick={() => setDetailModal({ type: 'unpaid', isOpen: true })}
+986:                onClick={() => setStatusModal({ type: 'TOTAL', isOpen: true })}
+993:                onClick={() => setStatusModal({ type: 'WORKING', isOpen: true })}
+1000:                onClick={() => setStatusModal({ type: 'WAITING', isOpen: true })}
+1007:                onClick={() => setStatusModal({ type: 'FINISHED', isOpen: true })}
+1014:                onClick={() => setStatusModal({ type: 'OFF_DUTY', isOpen: true })}
+1081:                  onClick={() => setViewMode('list')}
+1090:                  onClick={() => setViewMode('timeline')}
+1101:              onClick={() => setIsFormOpen(true)}
+1121:                    onClick={() => handleAddRecordForStaff(name)}
+1183:            onClose={() => {
+1194:                const timeA = a.id && checkInTimes[a.id] ? (checkInTimes[a.id]?.toMillis?.() || 0) : Number.MAX_SAFE_INTEGER;
+1195:                const timeB = b.id && checkInTimes[b.id] ? (checkInTimes[b.id]?.toMillis?.() || 0) : Number.MAX_SAFE_INTEGER;
+1213:            onClose={() => setIsStaffModalOpen(false)}
+1238:            onClose={() => setDetailModal(prev => ({ ...prev, isOpen: false }))}
+1252:        onClose={() => setStatusModal(prev => ({ ...prev, isOpen: false }))}
+1274:            onClose={() => setAlertConfig(null)}
+1283:            onClose={() => setManualProfitModalConfig(null)}
+1315:  onClose: () => void, 
+1326:  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+1330:  useEffect(() => {
+1333:      setSelectedIds(new Set());
+1349:    longPressTimer.current = setTimeout(() => handleLongPress(id), 500);
+1352:  const cancelPress = () => {
+1369:  const handleBulkAddRecord = () => {
+1375:    setSelectedIds(new Set());
+1376:    onClose();
+1380:    const start = r.startTime.toDate ? r.startTime.toDate() : new Date(r.startTime);
+1381:    const end = r.endTime.toDate ? r.endTime.toDate() : new Date(r.endTime);
+1382:    return start.getTime() === end.getTime();
+1419:      const timeA = checkInTimes[a.id!]?.toMillis ? checkInTimes[a.id!].toMillis() : (checkInTimes[a.id!] || 0);
+1420:      const timeB = checkInTimes[b.id!]?.toMillis ? checkInTimes[b.id!].toMillis() : (checkInTimes[b.id!] || 0);
+1487:                            const timeStr = checkInTime ? format(checkInTime.toDate ? checkInTime.toDate() : new Date(checkInTime), 'HH:mm') : '--:--';
+1536:                          onMouseDown={() => startPress(s.id!)}
+1539:                          onTouchStart={() => startPress(s.id!)}
+1541:                          onContextMenu={(e) => e.preventDefault()}
+1553:                                onClose();
+1557:                              onClose();
+1634:                  onClick={() => {
+1636:                    setSelectedIds(new Set());
+1673:  onClose: () => void, 
+1683:    e.preventDefault();
+1684:    if (!name.trim()) return;
+1689:        name: name.trim(),
+1691:        office: office.trim(),
+1692:        accountNumber: accountNumber.trim()
+1694:      onClose();
+1716:        onClick={(e) => e.stopPropagation()}
+1745:                  onClick={() => setType(t)}
+1822:  onClose: () => void, 
+1831:  onInstall: () => void, 
+1847:  useEffect(() => {
+1853:  const sortedStaff = useMemo(() => {
+1854:    const filtered = staff.filter(s => s.name.toLowerCase().includes(deferredSearchTerm.toLowerCase()));
+1863:        const timeA = checkInTimes[a.id!]?.toMillis?.() || 0;
+1864:        const timeB = checkInTimes[b.id!]?.toMillis?.() || 0;
+1872:  const sortedEstablishments = useMemo(() => {
+1873:    return [...establishments].filter(e => e.name.toLowerCase().includes(deferredSearchTerm.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name));
+1877:    e.preventDefault();
+1878:    if (!newName.trim()) return;
+1881:        await addStaff(newName.trim(), staffType);
+1883:        await addEstablishment(newName.trim());
+1953:          if (e.target === e.currentTarget) onClose();
+1961:        onClick={(e) => e.stopPropagation()}
+1968:              onClick={() => {
+1983:            onClick={() => setActiveTab('staff')}
+1992:            onClick={() => setActiveTab('establishments')}
+2035:                    onClick={() => setStaffType(type)}
+2127:                        onClick={() => setEditingStaff(s)}
+2134:                        onClick={async () => {
+2157:                          onFocus={(e) => e.target.select()}
+2158:                          onKeyDown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLInputElement).blur()}
+2170:                            onFocus={(e) => e.target.select()}
+2171:                            onKeyDown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLInputElement).blur()}
+2187:                            onClick={async () => {
+2227:                    onClick={async () => {
+2250:              onClose={() => setEditingStaff(null)}
+2290:  const staffGroups = useMemo(() => {
+2412:  const staffNames = useMemo(() => {
+2417:      const timeA = staffA?.id && checkInTimes[staffA.id] ? (checkInTimes[staffA.id]?.toMillis?.() || 0) : Number.MAX_SAFE_INTEGER;
+2418:      const timeB = staffB?.id && checkInTimes[staffB.id] ? (checkInTimes[staffB.id]?.toMillis?.() || 0) : Number.MAX_SAFE_INTEGER;
+2430:    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+2435:    const date = time.toDate ? time.toDate() : new Date(time);
+2436:    const h = date.getHours();
+2437:    const m = date.getMinutes();
+2485:                      onClick={() => onAddRecordForStaff(name)}
+2505:                          {format(checkInTimes[staffId].toDate(), 'HH:mm')}
+2506:                          {isOff && offTimes[staffId] && ` ~ ${format(offTimes[staffId].toDate(), 'HH:mm')}`}
+2512:                        onClick={() => onToggleOff(staffId)}
+2574:                          e.preventDefault();
+2575:                          e.stopPropagation();
+2580:                            e.preventDefault();
+2598:                      onClick={() => {
+2636:                    const date = t.toDate ? t.toDate() : new Date(t);
+2637:                    const h = date.getHours();
+2638:                    const m = date.getMinutes();
+2643:                  const start = record.startTime.toDate ? record.startTime.toDate() : new Date(record.startTime);
+2644:                  const end = record.endTime.toDate ? record.endTime.toDate() : new Date(record.endTime);
+2645:                  const isOngoing = start.getTime() === end.getTime();
+2654:                      const diffMs = currentTime.getTime() - start.getTime();
+2669:                      const diffMs = end.getTime() - start.getTime();
+2688:                      onClick={() => onEditRecord(record)}
+2777:                              팁 {record.tip.toLocaleString()}
+2838:  const staffGroups = useMemo(() => {
+2908:      const start = record.startTime.toDate ? record.startTime.toDate() : new Date(record.startTime);
+2909:      const end = record.endTime.toDate ? record.endTime.toDate() : new Date(record.endTime);
+2910:      if (start.getTime() === end.getTime()) {
+2968:  const staffNames = useMemo(() => {
+2973:      const timeA = staffA?.id && checkInTimes[staffA.id] ? (checkInTimes[staffA.id]?.toMillis?.() || 0) : Number.MAX_SAFE_INTEGER;
+2974:      const timeB = staffB?.id && checkInTimes[staffB.id] ? (checkInTimes[staffB.id]?.toMillis?.() || 0) : Number.MAX_SAFE_INTEGER;
+3005:                    onClick={() => onAddRecordForStaff(name)}
+3025:                        출근: {format(checkInTimes[staffId].toDate(), 'HH:mm')}
+3026:                        {isOff && offTimes[staffId] && ` | 퇴근: ${format(offTimes[staffId].toDate(), 'HH:mm')}`}
+3032:                      onClick={() => onToggleOff(staffId)}
+3096:                        e.preventDefault();
+3097:                        e.stopPropagation();
+3102:                          e.preventDefault();
+3111:                          <span className="text-[7px] font-bold text-white/80 leading-none mt-0.5">(팁 {staffGroups[name].totalTip.toLocaleString()})</span>
+3124:                    onClick={() => {
+3146:                  const date = t.toDate ? t.toDate() : new Date(t);
+3147:                  const h = date.getHours();
+3148:                  const m = date.getMinutes();
+3153:                const start = record.startTime.toDate ? record.startTime.toDate() : new Date(record.startTime);
+3154:                const end = record.endTime.toDate ? record.endTime.toDate() : new Date(record.endTime);
+3155:                const isOngoing = start.getTime() === end.getTime();
+3164:                  const diffMs = currentTime.getTime() - start.getTime();
+3184:                  const start = record.startTime.toDate ? record.startTime.toDate() : new Date(record.startTime);
+3185:                  const end = record.endTime.toDate ? record.endTime.toDate() : new Date(record.endTime);
+3186:                  const diffMs = end.getTime() - start.getTime();
+3208:                    onClick={() => onEditRecord(record)}
+3298:                            팁 {record.tip.toLocaleString()}
+3316:                onClick={() => onAddRecordForStaff(name)}
+3335:function ConfirmModal({ message, onConfirm, onCancel }: { message: string, onConfirm: () => void, onCancel: () => void }) {
+3343:          if (e.target === e.currentTarget) onCancel();
+3351:        onClick={(e) => e.stopPropagation()}
+3385:  onClose: () => void, 
+3387:  onAction?: () => void 
+3402:        onClick={(e) => e.stopPropagation()}
+3413:              onClick={() => {
+3414:                onAction();
+3415:                onClose();
+3442:  onClose: () => void, 
+3450:  const [confirmConfig, setConfirmConfig] = useState<{ message: string, action: () => void } | null>(null);
+3451:  const [alertConfig, setAlertConfig] = useState<{ message: string, actionLabel?: string, onAction?: () => void } | null>(null);
+3460:  useEffect(() => {
+3466:        setTimeout(() => {
+3472:      const timer = setTimeout(() => {
+3475:      return () => clearTimeout(timer);
+3480:    const now = new Date();
+3482:    if (now.getHours() < 12) {
+3503:  useEffect(() => {
+3522:      return Array.from(newMap.values());
+3531:  useEffect(() => {
+3537:        const timer = setTimeout(() => setHighlightedId(null), 3000);
+3538:        return () => clearTimeout(timer);
+3545:      let collectedAt = new Date();
+3557:          const rDate = r.collectedAt.toDate ? r.collectedAt.toDate() : new Date(r.collectedAt);
+3558:          return rDate.getMonth() === collectedAt.getMonth() &&
+3559:                 rDate.getDate() === collectedAt.getDate() &&
+3560:                 rDate.getHours() === collectedAt.getHours() &&
+3561:                 rDate.getMinutes() === collectedAt.getMinutes();
+3566:            message: `동일한 날짜와 시간의 수금 기록이 이미 존재합니다.\n\n[중복 기록 정보]\n파견일: ${duplicateRecord.date.slice(5,7)}/${duplicateRecord.date.slice(8,10)}\n업소: ${duplicateRecord.establishmentName}\n직원: ${duplicateRecord.staffName}\n수금시간: ${format(duplicateRecord.collectedAt.toDate(), 'MM/dd HH:mm')}\n금액: ${duplicateRecord.totalAmount.toLocaleString()}원\n\n중복 입력을 확인해주세요.`,
+3568:            onAction: () => setHighlightedId(duplicateRecord.id!)
+3591:      let collectedAt = new Date();
+3603:          const rDate = r.collectedAt.toDate ? r.collectedAt.toDate() : new Date(r.collectedAt);
+3604:          return rDate.getMonth() === collectedAt.getMonth() &&
+3605:                 rDate.getDate() === collectedAt.getDate() &&
+3606:                 rDate.getHours() === collectedAt.getHours() &&
+3607:                 rDate.getMinutes() === collectedAt.getMinutes();
+3612:            message: `동일한 날짜와 시간의 수금 기록이 이미 존재합니다.\n\n[중복 기록 정보]\n파견일: ${duplicateRecord.date.slice(5,7)}/${duplicateRecord.date.slice(8,10)}\n업소: ${duplicateRecord.establishmentName}\n직원: ${duplicateRecord.staffName}\n수금시간: ${format(duplicateRecord.collectedAt.toDate(), 'MM/dd HH:mm')}\n금액: ${duplicateRecord.totalAmount.toLocaleString()}원\n\n중복 입력을 확인해주세요.`,
+3614:            onAction: () => setHighlightedId(duplicateRecord.id!)
+3660:        const now = new Date();
+3673:        staffPaidAt = Timestamp.now();
+3696:  const data = useMemo(() => {
+3700:        const start = r.startTime.toDate ? r.startTime.toDate() : new Date(r.startTime);
+3701:        const end = r.endTime.toDate ? r.endTime.toDate() : new Date(r.endTime);
+3702:        return start.getTime() === end.getTime();
+3735:        const lowerSearch = deferredSearchTerm.toLowerCase();
+3739:            const matchesEst = estName.toLowerCase().includes(lowerSearch);
+3740:            const matchesDepositor = estData.records.some(r => r.depositorName?.toLowerCase().includes(lowerSearch));
+3796:        if (deferredSearchTerm && !r.staffName.toLowerCase().includes(deferredSearchTerm.toLowerCase())) return;
+3827:          const tA = sA ? (checkInTimes[sA.id!]?.toMillis?.() || 0) : 0;
+3828:          const tB = sB ? (checkInTimes[sB.id!]?.toMillis?.() || 0) : 0;
+3846:        if (deferredSearchTerm && !name.toLowerCase().includes(deferredSearchTerm.toLowerCase())) return;
+3862:        if (deferredSearchTerm && !key.toLowerCase().includes(deferredSearchTerm.toLowerCase())) return;
+3873:        const timeA = staffA ? (checkInTimes[staffA.id!]?.toMillis?.() || 0) : 0;
+3874:        const timeB = staffB ? (checkInTimes[staffB.id!]?.toMillis?.() || 0) : 0;
+3882:  const total = useMemo(() => {
+3904:          if (e.target === e.currentTarget) onClose();
+3912:        onClick={(e) => e.stopPropagation()}
+3918:            <p className="text-xs text-stone-500 font-bold mt-1">총 합계: {total.toLocaleString()}원</p>
+3975:                                {estData.records.reduce((sum, r) => sum + r.totalAmount, 0).toLocaleString()}원
+3982:                                  {estData.records.filter(r => r.paymentMethod !== 'UNPAID').reduce((sum, r) => sum + r.totalAmount, 0).toLocaleString()}원
+3989:                              남은 미수: {estData.total.toLocaleString()}원
+4001:                              onCancel={() => setBatchCollecting(null)}
+4008:                                    onClick={() => setBatchCollecting({
+4012:                                      date: format(new Date(), 'MMdd'),
+4013:                                      time: format(new Date(), 'HHmm'),
+4021:                                    onClick={() => setBatchCollecting({
+4025:                                      date: format(new Date(), 'MMdd'),
+4026:                                      time: format(new Date(), 'HHmm'),
+4039:                              onClick={() => {
+4042:                                  action: async () => {
+4102:                                  <span className="text-stone-900 font-black text-xs ml-auto">{r.totalAmount.toLocaleString()}원</span>
+4108:                                      {(() => {
+4110:                                          const d = r.collectedAt.toDate ? r.collectedAt.toDate() : new Date(r.collectedAt);
+4113:                                      })()}
+4115:                                    <span className="text-emerald-700 font-black text-xs ml-auto">{r.totalAmount.toLocaleString()}원</span>
+4129:                                    onCancel={() => setCollectingInfo(null)}
+4135:                                        e.stopPropagation();
+4139:                                          date: format(new Date(), 'MMdd'),
+4140:                                          time: format(new Date(), 'HHmm'),
+4150:                                        e.stopPropagation();
+4154:                                          date: format(new Date(), 'MMdd'),
+4155:                                          time: format(new Date(), 'HHmm'),
+4173:                                    onClick={() => {
+4176:                                        action: async () => {
+4199:                                      {(() => {
+4201:                                          const d = r.collectedAt.toDate ? r.collectedAt.toDate() : new Date(r.collectedAt);
+4206:                                      })()}
+4267:                              <span className="text-xs font-bold text-stone-500">지급액: {d.total.toLocaleString()}원</span>
+4269:                                <span className="text-xs font-bold text-red-400">팁: {d.totalTip.toLocaleString()}원</span>
+4277:                                onClick={() => {
+4280:                                    action: async () => {
+4301:                                  onClick={() => setPaymentSelection({ name, records: d.records, method: 'CASH' })}
+4307:                                  onClick={() => setPaymentSelection({ name, records: d.records, method: 'TRANSFER' })}
+4323:                                  <span className="text-[8px] opacity-50">({format(r.staffPaidAt.toDate(), 'HH:mm')})</span>
+4326:                              <span className="font-bold">{r.staffPayment.toLocaleString()}원</span>
+4347:                    {type === 'commission' ? (value as { applied: number }).applied.toLocaleString() : (value as number).toLocaleString()}원
+4351:                      원래: {(value as { original: number }).original.toLocaleString()}원
+4368:              onConfirm={async () => {
+4370:                  await confirmConfig.action();
+4376:              onCancel={() => setConfirmConfig(null)}
+4384:              onClose={() => setAlertConfig(null)}
+4395:                onClick={() => {
+4405:                onClick={(e) => e.stopPropagation()}
+4421:                    onClick={() => handleStaffPayment(paymentSelection.records, paymentSelection.method, format(new Date(), 'MMdd'), format(new Date(), 'HHmm'))}
+4427:                    onClick={() => handleStaffPayment(paymentSelection.records, paymentSelection.method)}
+4435:                      onClick={() => {
+4440:                            date: format(new Date(), 'MMdd'),
+4441:                            time: format(new Date(), 'HHmm')
+4443:                          setTimeout(() => customTimeInputRef.current?.focus(), 100);
+4491:                    onClick={() => {
+4525:  onClick?: () => void, 
+4563:        {displayValue || <span>{value.toLocaleString()}원</span>}
+4578:  onClose: () => void, 
+4585:  const [manualAmount, setManualAmount] = useState<string>(currentManualProfit?.toString() || '');
+4588:  const handleSave = async () => {
+4602:      onClose();
+4631:              onClick={() => setProfitType('AUTO')}
+4642:                {currentCalculatedProfit.toLocaleString()}원
+4647:              onClick={() => setProfitType('MANUAL')}
+4681:                    setTimeout(() => {
+4682:                      target.select();
+4722:  onClose: () => void, 
+4734:  const { initialStaffNames, groupStaffNames, groupRecords } = useMemo(() => {
+4736:      const start = editRecord.startTime.toDate ? editRecord.startTime.toDate() : new Date(editRecord.startTime);
+4741:          (r.startTime.toDate ? r.startTime.toDate().getTime() : new Date(r.startTime).getTime()) === start.getTime()
+4761:    startTime: editRecord ? format(editRecord.startTime.toDate ? editRecord.startTime.toDate() : new Date(editRecord.startTime), 'HH:mm') : format(currentTime, 'HH:mm'),
+4762:    endTime: editRecord ? format(editRecord.endTime.toDate ? editRecord.endTime.toDate() : new Date(editRecord.endTime), 'HH:mm') : format(currentTime, 'HH:mm'),
+4785:  const filteredEstablishments = useMemo(() => {
+4788:      .filter(e => e.name.toLowerCase().includes(formData.establishmentName.toLowerCase()))
+4789:      .filter(e => e.name.toLowerCase() !== formData.establishmentName.toLowerCase())
+4831:  useEffect(() => {
+4850:  useEffect(() => {
+4874:    e.preventDefault();
+4898:        const originalStart = editRecord.startTime.toDate ? editRecord.startTime.toDate() : new Date(editRecord.startTime);
+4899:        const originalEnd = editRecord.endTime.toDate ? editRecord.endTime.toDate() : new Date(editRecord.endTime);
+4900:        const originalEstablishment = editRecord.establishmentName.trim();
+4905:          const rStart = r.startTime.toDate ? r.startTime.toDate() : new Date(r.startTime);
+4906:          const rEnd = r.endTime.toDate ? r.endTime.toDate() : new Date(r.endTime);
+4907:          const rEstablishment = r.establishmentName.trim();
+4909:          const isOngoing = originalStart.getTime() === originalEnd.getTime();
+4911:            ? (rStart.getTime() === originalStart.getTime() && rEnd.getTime() === originalEnd.getTime())
+4938:          const rStart = r.startTime.toDate ? r.startTime.toDate() : new Date(r.startTime);
+4939:          const rEnd = r.endTime.toDate ? r.endTime.toDate() : new Date(r.endTime);
+4940:          return rStart.getTime() === rEnd.getTime(); // Ongoing
+4959:          const isFinishing = start.getTime() !== end.getTime();
+4967:              const rStart = r.startTime.toDate ? r.startTime.toDate() : new Date(r.startTime);
+4968:              const rEnd = r.endTime.toDate ? r.endTime.toDate() : new Date(r.endTime);
+4969:              return rStart.getTime() === rEnd.getTime(); // In progress
+4988:            const rStart = r.startTime.toDate ? r.startTime.toDate() : new Date(r.startTime);
+4989:            const rEnd = r.endTime.toDate ? r.endTime.toDate() : new Date(r.endTime);
+4990:            return rStart.getTime() === rEnd.getTime();
+5026:              collectedAt: isCollectingNow ? Timestamp.now() : (formData.paymentMethod === 'UNPAID' ? null : (recordToUpdate.collectedAt || null)),
+5061:            collectedAt: isPaidImmediately ? Timestamp.now() : null,
+5070:      onClose();
+5084:    const date = new Date();
+5114:  const getDurationMinutes = () => {
+5125:    if (start.getTime() === end.getTime()) {
+5126:      return Math.max(0, Math.floor((currentTime.getTime() - start.getTime()) / 60000));
+5129:    return Math.max(0, Math.floor((end.getTime() - start.getTime()) / 60000));
+5132:  const durationMinutes = getDurationMinutes();
+5153:        onClick={(e) => e.stopPropagation()}
+5175:                onClick={() => setIsStaffSelectorOpen(true)}
+5193:                      onClick={() => toggleStaffSelection(name)}
+5214:                onFocus={() => setIsEstablishmentDropdownOpen(true)}
+5215:                onBlur={() => {
+5218:                  setTimeout(() => setIsEstablishmentDropdownOpen(false), 200);
+5222:                    e.preventDefault();
+5238:                        ev.preventDefault();
+5259:                  onClick={() => {
+5297:                      setTimeout(() => {
+5298:                        target.select();
+5302:                    onContextMenu={(e) => e.preventDefault()}
+5310:                  onContextMenu={(e) => e.preventDefault()}
+5311:                  onClick={() => {
+5312:                    const now = format(new Date(), 'HH:mm');
+5314:                    setTimeout(() => {
+5316:                        startTimeInputRef.current.focus();
+5343:                      setTimeout(() => {
+5344:                        target.select();
+5348:                    onContextMenu={(e) => e.preventDefault()}
+5356:                  onContextMenu={(e) => e.preventDefault()}
+5357:                  onClick={() => {
+5358:                    const now = format(new Date(), 'HH:mm');
+5360:                    setTimeout(() => {
+5362:                        endTimeInputRef.current.focus();
+5396:                    setTimeout(() => {
+5397:                      target.select();
+5401:                  onContextMenu={(e) => e.preventDefault()}
+5429:                  onClick={() => setFormData({
+5446:                  onClick={() => setFormData({
+5463:                  onClick={() => setFormData({
+5487:                    onFocus={(e) => e.target.select()}
+5506:                  onClick={() => adjustTime(m)}
+5516:                  onClick={() => adjustTime(-m)}
+5531:                  onClick={() => setFormData({...formData, paymentMethod: 'CASH', isPass: true})}
+5545:                    onClick={() => setFormData({...formData, paymentMethod: method, isPass: false})}
+5564:                onClick={async () => {
+5570:                      const rStart = r.startTime.toDate ? r.startTime.toDate() : new Date(r.startTime);
+5571:                      const rEnd = r.endTime.toDate ? r.endTime.toDate() : new Date(r.endTime);
+5572:                      return rStart.getTime() === rEnd.getTime();
+5590:                      onClose();
+5597:                onMouseLeave={() => {
+5628:                onClick={() => {
+5629:                  const now = format(new Date(), 'HH:mm');
+5684:              onClick={() => setIsStaffSelectorOpen(false)}
+5695:                <button onClick={() => setIsStaffSelectorOpen(false)} className="text-stone-400">
+5708:                        onClick={() => toggleStaffSelection(s.name)}
+5737:                              출근: {format(checkInTimes[s.id].toDate(), 'HH:mm')}
+5750:                  onClick={() => setIsStaffSelectorOpen(false)}

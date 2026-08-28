@@ -1,0 +1,6 @@
+{
+  "name": "정산프로그램",
+  "description": "일일 사무실 정산 및 파견 관리 시스템",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,62 @@
+{
+  "entities": {
+    "Dispatch": {
+      "title": "Dispatch Record",
+      "description": "A record of a staff member's work at an establishment.",
+      "type": "object",
+      "properties": {
+        "staffName": { "type": "string", "description": "Name of the staff member" },
+        "establishmentName": { "type": "string", "description": "Name of the establishment" },
+        "systemType": { "type": "string", "enum": ["TABLE", "PUBLIC", "HOPPER"], "description": "Type of service provided" },
+        "startTime": { "type": "string", "format": "date-time", "description": "Start time of the work" },
+        "endTime": { "type": "string", "format": "date-time", "description": "End time of the work" },
+        "durationHours": { "type": "number", "description": "Calculated duration in hours" },
+        "totalAmount": { "type": "number", "description": "Total amount received from establishment" },
+        "commission": { "type": "number", "description": "Office commission (10k per hour)" },
+        "staffPayment": { "type": "number", "description": "Amount to be paid to the staff" },
+        "paymentMethod": { "type": "string", "enum": ["CASH", "TRANSFER", "UNPAID"], "description": "How the money was received" },
+        "date": { "type": "string", "description": "Date of work for grouping (YYYY-MM-DD)" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "uid": { "type": "string", "description": "User ID of the owner" }
+      },
+      "required": ["staffName", "establishmentName", "systemType", "startTime", "endTime", "paymentMethod", "uid"]
+    },
+    "Staff": {
+      "title": "Staff Member",
+      "description": "A master record of an employee.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "active": { "type": "boolean" },
+        "uid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "active", "uid"]
+    },
+    "Attendance": {
+      "title": "Daily Attendance",
+      "description": "Record of who is working on a specific date.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "description": "YYYY-MM-DD" },
+        "staffIds": { "type": "array", "items": { "type": "string" } },
+        "uid": { "type": "string" }
+      },
+      "required": ["date", "staffIds", "uid"]
+    }
+  },
+  "firestore": {
+    "/dispatches/{dispatchId}": {
+      "schema": "Dispatch",
+      "description": "Collection of all work dispatch records"
+    },
+    "/staff/{staffId}": {
+      "schema": "Staff",
+      "description": "Master list of employees"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": "Attendance",
+      "description": "Daily attendance records"
+    }
+  }
+}
