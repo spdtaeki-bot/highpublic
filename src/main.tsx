@@ -30,7 +30,8 @@ if (rootElement) {
 // AI Studio 개발 환경에서는 캐시 꼬임 방지를 위해 비활성화합니다.
 if ('serviceWorker' in navigator && process.env.NODE_ENV === 'production') {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(err => {
+    // 하위 경로(예: /highpublic/) 배포에서도 동작하도록 base URL 기준으로 등록
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(err => {
       console.error('ServiceWorker registration failed: ', err);
     });
   });
