@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -9,6 +10,9 @@ const __dirname = path.dirname(__filename);
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  // Gzip compression middleware to drastically reduce transfer size for mobile clients
+  app.use(compression());
 
   // API routes (필요 시 추가)
   app.get("/api/health", (req, res) => {
@@ -24,7 +28,14 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(process.cwd(), 'dist')));
+    // 1년 캐시가 적용된 불변 assets 서빙 (모바일 재방문 시 0초 로딩)
+    app.use('/assets', express.static(path.join(process.cwd(), 'dist/assets'), {
+      maxAge: '1y',
+      immutable: true,
+    }));
+    app.use(express.static(path.join(process.cwd(), 'dist'), {
+      maxAge: '1h',
+    }));
   }
 
   // 모든 경로(*)에 대해 index.html을 반환하여 SPA 라우팅 지원

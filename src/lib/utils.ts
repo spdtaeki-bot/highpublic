@@ -73,6 +73,10 @@ export interface RoundBreakdownItem {
   staffName?: string;
   isOnSite?: boolean;
   isDispatchBox?: boolean;
+  recordId?: string;
+  recordIds?: string[];
+  historyIndex?: number;
+  rawEntry?: CollectionHistoryEntry;
 }
 
 export interface EstablishmentCollectionResult {
@@ -96,71 +100,80 @@ export function getRecordCollectionHistory(
     Array.isArray(r.collectionHistory) &&
     r.collectionHistory.length > 0
   ) {
-    return r.collectionHistory.filter(
-      (e) => e && (e.amount !== undefined || e.collectedAt),
+    const valid = r.collectionHistory.filter(
+      (e) => e && ((e.amount !== undefined && e.amount > 0) || e.collectedAt),
     );
-  }
-
-  // Otherwise synthesize from single-record fields
-  const targetTotal =
-    r.paymentMethod !== "UNPAID" && r.collectedAmount !== undefined
-      ? r.collectedAmount
-      : r.paymentMethod !== "UNPAID"
-        ? r.totalAmount || 0
-        : 0;
-
-  if (targetTotal <= 0 && (!r.paymentMethod || r.paymentMethod === "UNPAID")) {
-    return [];
-  }
-
-  const result: CollectionHistoryEntry[] = [];
-  if (r.collectedAt) {
-    result.push({
-      collectedAt: r.collectedAt,
-      amount:
-        r.collectedAmount !== undefined
-          ? r.collectedAmount
-          : r.totalAmount || 0,
-      paymentMethod:
-        r.paymentMethod && r.paymentMethod !== "UNPAID"
-          ? r.paymentMethod
-          : undefined,
-      depositorName: r.depositorName,
-      note: "1차 수금",
-    });
-  }
-
-  if (r.additionalCollectedAt) {
-    const t1 = r.collectedAt
-      ? (r.collectedAt.toDate
-          ? r.collectedAt.toDate()
-          : new Date(r.collectedAt)
-        ).getTime()
-      : 0;
-    const t2 = (
-      r.additionalCollectedAt.toDate
-        ? r.additionalCollectedAt.toDate()
-        : new Date(r.additionalCollectedAt)
-    ).getTime();
-    if (!isNaN(t2) && t2 !== t1) {
-      const firstAmt = result.length > 0 ? result[0].amount || 0 : 0;
-      const diffAmt = Math.max(0, targetTotal - firstAmt);
-      if (diffAmt > 0) {
-        result.push({
-          collectedAt: r.additionalCollectedAt,
-          amount: diffAmt,
-          paymentMethod:
-            r.paymentMethod && r.paymentMethod !== "UNPAID"
-              ? r.paymentMethod
-              : undefined,
-          depositorName: r.depositorName,
-          note: "2차 추가수금",
-        });
-      }
+    if (valid.length > 0) {
+      return valid;
     }
   }
 
-  return result;
+  // If isPass is true, treat it as collected with the full totalAmount
+  if (r.isPass) {
+    const targetTotal =
+      r.collectedAmount !== undefined && r.collectedAmount > 0
+        ? r.collectedAmount
+        : r.totalAmount || 0;
+    return [
+      {
+        collectedAt: r.collectedAt || (r as any).createdAt || null,
+        amount: targetTotal,
+        paymentMethod: r.paymentMethod !== "UNPAID" ? r.paymentMethod : undefined,
+        depositorName: r.depositorName,
+        note: "패스 수금",
+      },
+    ];
+  }
+
+  // Otherwise synthesize from single-record fields
+  if (r.paymentMethod && r.paymentMethod !== "UNPAID") {
+    const targetTotal =
+      r.collectedAmount !== undefined && r.collectedAmount > 0
+        ? r.collectedAmount
+        : r.totalAmount || 0;
+
+    if (targetTotal > 0) {
+      const result: CollectionHistoryEntry[] = [];
+      result.push({
+        collectedAt: r.collectedAt || (r as any).createdAt || null,
+        amount: targetTotal,
+        paymentMethod: r.paymentMethod,
+        depositorName: r.depositorName,
+        note: r.isDispatchBoxCollection ? "현장수금" : "1차 수금",
+      });
+
+      if (r.additionalCollectedAt) {
+        const t1 = r.collectedAt
+          ? (r.collectedAt.toDate
+              ? r.collectedAt.toDate()
+              : new Date(r.collectedAt)
+            ).getTime()
+          : 0;
+        const t2 = (
+          r.additionalCollectedAt.toDate
+            ? r.additionalCollectedAt.toDate()
+            : new Date(r.additionalCollectedAt)
+        ).getTime();
+        if (!isNaN(t2) && t2 !== t1) {
+          const firstAmt = result[0].amount || 0;
+          const diffAmt = Math.max(0, targetTotal - firstAmt);
+          if (diffAmt > 0) {
+            result.push({
+              collectedAt: r.additionalCollectedAt,
+              amount: diffAmt,
+              paymentMethod: r.paymentMethod,
+              depositorName: r.depositorName,
+              note: "2차 추가수금",
+            });
+          }
+        }
+      }
+
+      return result;
+    }
+  }
+
+  return [];
 }
 
 export function calculateEstablishmentCollection(
@@ -208,15 +221,22 @@ export function calculateEstablishmentCollection(
 
   // Helper to compute collected amount for an individual record
   const getRecCollected = (r: DispatchRecord): number => {
+    if (!r) return 0;
     if (
       r.collectionHistory &&
       Array.isArray(r.collectionHistory) &&
       r.collectionHistory.length > 0
     ) {
-      return r.collectionHistory.reduce((s, e) => s + (e.amount || 0), 0);
+      const sum = r.collectionHistory.reduce((s, e) => s + (e.amount || 0), 0);
+      if (sum > 0) return sum;
+    }
+    if (r.isPass) {
+      return r.collectedAmount !== undefined && r.collectedAmount > 0
+        ? r.collectedAmount
+        : (r.totalAmount || 0);
     }
     if (r.paymentMethod && r.paymentMethod !== "UNPAID") {
-      return r.collectedAmount !== undefined && r.collectedAmount >= 0
+      return r.collectedAmount !== undefined && r.collectedAmount > 0
         ? r.collectedAmount
         : (r.totalAmount || 0);
     }
@@ -229,8 +249,11 @@ export function calculateEstablishmentCollection(
   // 1. Check if all records are completely unpaid
   const isAllUnpaid = records.every(
     (r) =>
+      !r.isPass &&
       (r.paymentMethod === "UNPAID" || !r.paymentMethod) &&
-      (!r.collectionHistory || r.collectionHistory.length === 0) &&
+      (!r.collectionHistory ||
+        r.collectionHistory.length === 0 ||
+        r.collectionHistory.every((e) => !e.amount || e.amount <= 0)) &&
       (!r.collectedAmount || r.collectedAmount <= 0) &&
       !r.collectedAt,
   );
@@ -251,24 +274,21 @@ export function calculateEstablishmentCollection(
     (r) =>
       r.collectionHistory &&
       Array.isArray(r.collectionHistory) &&
-      r.collectionHistory.length > 0,
+      r.collectionHistory.length > 0 &&
+      r.collectionHistory.some((e) => (e.amount || 0) > 0),
   );
 
   // Determine if records share an Establishment-Level batch history
-  // An establishment-level batch history is when records share an IDENTICAL collection history array
-  // whose total represents the whole establishment amount.
   let isEstablishmentBatchHistory = false;
   let sharedBatchHistory: CollectionHistoryEntry[] = [];
+  let batchRecordIds: string[] = [];
 
-  if (records.length === 1) {
-    if (recordsWithHistory.length === 1) {
-      isEstablishmentBatchHistory = true;
-      sharedBatchHistory = recordsWithHistory[0].collectionHistory!;
-    }
-  } else if (recordsWithHistory.length > 1) {
-    const firstHist = recordsWithHistory[0].collectionHistory!;
+  if (recordsWithHistory.length > 0) {
+    const firstHist = recordsWithHistory[0].collectionHistory!.filter(
+      (e) => (e.amount || 0) > 0,
+    );
     const allIdentical = recordsWithHistory.every((r) => {
-      const h = r.collectionHistory!;
+      const h = r.collectionHistory!.filter((e) => (e.amount || 0) > 0);
       if (h.length !== firstHist.length) return false;
       return h.every(
         (entry, i) =>
@@ -278,9 +298,47 @@ export function calculateEstablishmentCollection(
       );
     });
 
-    if (allIdentical && recordsWithHistory.length === records.length) {
-      isEstablishmentBatchHistory = true;
-      sharedBatchHistory = firstHist;
+    if (allIdentical && firstHist.length > 0) {
+      if (records.length === 1) {
+        isEstablishmentBatchHistory = true;
+        sharedBatchHistory = firstHist;
+        batchRecordIds = [records[0].id!].filter(Boolean);
+      } else if (recordsWithHistory.length > 1) {
+        const sharedSum = firstHist.reduce((s, e) => s + (e.amount || 0), 0);
+        const maxSingleRecordAmount = Math.max(
+          ...recordsWithHistory.map((r) => r.totalAmount || 0),
+        );
+        const sumOfIndividual = recordsWithHistory.reduce(
+          (s, r) => s + getRecCollected(r),
+          0,
+        );
+        const recordsWithHistoryRequestedSum = recordsWithHistory.reduce(
+          (s, r) => s + (r.totalAmount || 0),
+          0,
+        );
+
+        // Check if each record with history is simply paying its own individual total amount
+        const eachRecordPaysItsOwn = recordsWithHistory.every(
+          (r) =>
+            firstHist.length === 1 &&
+            (r.totalAmount || 0) === (firstHist[0].amount || 0),
+        );
+
+        if (!eachRecordPaysItsOwn) {
+          if (
+            sumOfIndividual > recordsWithHistoryRequestedSum ||
+            sharedSum === recordsWithHistoryRequestedSum ||
+            sharedSum > maxSingleRecordAmount ||
+            recordsWithHistory.every((r) => !r.isDispatchBoxCollection)
+          ) {
+            isEstablishmentBatchHistory = true;
+            sharedBatchHistory = firstHist;
+            batchRecordIds = recordsWithHistory
+              .map((r) => r.id!)
+              .filter(Boolean);
+          }
+        }
+      }
     }
   }
 
@@ -301,9 +359,37 @@ export function calculateEstablishmentCollection(
         dateStr: formatDateHelper(entry.collectedAt),
         paymentMethod: entry.paymentMethod,
         depositorName: entry.depositorName,
+        historyIndex: idx,
+        recordIds: batchRecordIds,
+        rawEntry: entry,
       };
     });
     totalCollected = roundBreakdown.reduce((s, x) => s + (x.amount || 0), 0);
+
+    // Also include any individual payments from records without batch history
+    records
+      .filter((r) => !batchRecordIds.includes(r.id!))
+      .forEach((r) => {
+        const paid = getRecCollected(r);
+        if (paid > 0) {
+          totalCollected += paid;
+          roundBreakdown.push({
+            round: 0,
+            label: "현장",
+            amount: paid,
+            dateStr: formatDateHelper(
+              r.collectedAt || (r as any).updatedAt || (r as any).createdAt,
+            ),
+            paymentMethod: r.paymentMethod,
+            depositorName: r.depositorName,
+            staffName: r.staffName,
+            isOnSite: true,
+            isDispatchBox: true,
+            recordId: r.id,
+            recordIds: r.id ? [r.id] : [],
+          });
+        }
+      });
   } else {
     // Individual record collections
     totalCollected = records.reduce((sum, r) => sum + getRecCollected(r), 0);
@@ -318,6 +404,10 @@ export function calculateEstablishmentCollection(
       staffName?: string;
       isOnSite?: boolean;
       isDispatchBox?: boolean;
+      recordId?: string;
+      recordIds?: string[];
+      historyIndex?: number;
+      rawEntry?: CollectionHistoryEntry;
     }
 
     const events: CollectionEventItem[] = [];
@@ -346,6 +436,9 @@ export function calculateEstablishmentCollection(
               staffName: r.staffName,
               isOnSite: isEntryOnSite,
               isDispatchBox: isRecordDirectBox,
+              recordId: r.id,
+              historyIndex: idx,
+              rawEntry: entry,
             });
           }
         });
@@ -369,6 +462,7 @@ export function calculateEstablishmentCollection(
             staffName: r.staffName,
             isOnSite: isRecordDirectBox,
             isDispatchBox: isRecordDirectBox,
+            recordId: r.id,
           });
         }
       }
@@ -377,35 +471,8 @@ export function calculateEstablishmentCollection(
     // Sort all collection events chronologically by timestamp
     events.sort((a, b) => a.timestamp - b.timestamp);
 
-    // Group only events that occurred at the exact same minute with identical paymentMethod, depositor, and onSite status
-    const groupedEvents: CollectionEventItem[] = [];
-    events.forEach((ev) => {
-      const existing = ev.dateStr
-        ? groupedEvents.find(
-            (g) =>
-              g.dateStr === ev.dateStr &&
-              g.paymentMethod === ev.paymentMethod &&
-              (g.depositorName || "") === (ev.depositorName || "") &&
-              Boolean(g.isOnSite) === Boolean(ev.isOnSite),
-          )
-        : null;
-
-      if (existing) {
-        existing.amount += ev.amount;
-        if (ev.staffName && !existing.staffName?.includes(ev.staffName)) {
-          existing.staffName = existing.staffName
-            ? `${existing.staffName}, ${ev.staffName}`
-            : ev.staffName;
-        }
-      } else {
-        groupedEvents.push({ ...ev });
-      }
-    });
-
-    // Determine round numbers and labels:
-    // On-site collections are labeled "현장" (or with staffName), non-onsite collections count rounds (1차, 2차...)
     let roundCounter = 0;
-    roundBreakdown = groupedEvents.map((ev) => {
+    roundBreakdown = events.map((ev) => {
       let isRound = false;
       let label = "";
 
@@ -427,6 +494,10 @@ export function calculateEstablishmentCollection(
         staffName: ev.staffName,
         isOnSite: ev.isOnSite,
         isDispatchBox: ev.isDispatchBox,
+        recordId: ev.recordId,
+        recordIds: ev.recordIds || (ev.recordId ? [ev.recordId] : []),
+        historyIndex: ev.historyIndex,
+        rawEntry: ev.rawEntry,
       };
     });
   }
@@ -476,8 +547,6 @@ export function formatStaffNameComponents(fullName: string) {
   }
 
   // 2. If longer than 4 characters -> 위탁직원
-  // e.g. "하퍼 요셉(정인)" or "하퍼요셉정인"
-  // If has bracket e.g. "하퍼 요셉 (정인)"
   const bracketMatch = trimmed.match(/^([^(]+)\s*\(([^)]+)\)$/);
   if (bracketMatch) {
     const mainPart = bracketMatch[1].trim();
@@ -487,21 +556,185 @@ export function formatStaffNameComponents(fullName: string) {
       fullName: trimmed,
       category: mainPart.startsWith("하퍼") ? "하퍼" : mainPart.startsWith("퍼블릭") ? "퍼블릭" : "커피",
       namePart: mainPart,
-      affiliation: affPart,
+      affiliation: affPart || "위탁",
       isDirect: false,
     };
   }
 
-  // Otherwise take first 4 chars as main4 and remaining as affiliation
-  const main4 = cleanNoSpace.slice(0, 4);
-  const remaining = cleanNoSpace.slice(4);
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  let affiliation = "";
+  let main4 = "";
+
+  if (parts.length >= 3) {
+    // e.g. ["하퍼", "예슬", "샤넬"]
+    main4 = `${parts[0]} ${parts[1]}`;
+    affiliation = parts.slice(2).join(" ").trim();
+  } else if (parts.length === 2) {
+    // e.g. ["하퍼", "예슬샤넬"]
+    if (parts[1].length > 2) {
+      main4 = `${parts[0]} ${parts[1].slice(0, 2)}`;
+      affiliation = parts[1].slice(2).trim();
+    } else {
+      main4 = parts[0];
+      affiliation = parts[1].trim();
+    }
+  } else {
+    // e.g. "하퍼예슬샤넬"
+    main4 = `${cleanNoSpace.slice(0, 2)} ${cleanNoSpace.slice(2, 4)}`;
+    affiliation = cleanNoSpace.slice(4).trim();
+  }
+
+  affiliation = affiliation.replace(/^[\(\[\{]+|[\)\]\}]+$/g, "").trim();
+  if (!affiliation) {
+    affiliation = "위탁";
+  }
+
+  let category = "커피";
+  let namePart = cleanNoSpace.slice(0, 4);
+  if (cleanNoSpace.startsWith("하퍼") || cleanNoSpace.startsWith("하_")) {
+    category = "하퍼";
+    namePart = cleanNoSpace.slice(0, 4).replace(/^하[퍼_]?/, "");
+  } else if (cleanNoSpace.startsWith("퍼블릭") || cleanNoSpace.startsWith("퍼_")) {
+    category = "퍼블릭";
+    namePart = cleanNoSpace.slice(0, 4).replace(/^퍼[블릭_]?/, "");
+  } else if (cleanNoSpace.startsWith("커피") || cleanNoSpace.startsWith("커_")) {
+    category = "커피";
+    namePart = cleanNoSpace.slice(0, 4).replace(/^커[피_]?/, "");
+  }
 
   return {
-    main4,
+    main4: main4 || trimmed.slice(0, 5),
     fullName: trimmed,
-    category: main4.startsWith("하퍼") ? "하퍼" : main4.startsWith("퍼블릭") ? "퍼블릭" : "커피",
-    namePart: main4,
-    affiliation: remaining || "위탁",
+    category,
+    namePart: namePart || trimmed,
+    affiliation,
     isDirect: false,
   };
+}
+
+/**
+ * 소속(직속 vs 위탁/샤넬 등)을 기준으로 두 직원 이름이 동일인물인지 철저히 판별하는 함수.
+ * 직속 예슬과 샤넬 예슬처럼 동명이인이더라도 소속이 다르면 절대 같은 사람으로 간주하지 않습니다.
+ */
+export function isSameStaffIdentity(nameA: string, nameB: string): boolean {
+  if (!nameA || !nameB) return false;
+  const trimmedA = nameA.trim();
+  const trimmedB = nameB.trim();
+  if (trimmedA === trimmedB) return true;
+
+  const cleanA = trimmedA.replace(/\s+/g, "");
+  const cleanB = trimmedB.replace(/\s+/g, "");
+  if (cleanA === cleanB) return true;
+
+  const compA = formatStaffNameComponents(trimmedA);
+  const compB = formatStaffNameComponents(trimmedB);
+
+  // 1. 한 쪽은 직속이고 다른 쪽은 위탁인 경우 -> 절대 동일인이 아님!
+  if (compA.isDirect !== compB.isDirect) {
+    return false;
+  }
+
+  // 2. 둘 다 위탁인 경우 -> 소속(affiliation)이 반드시 일치해야 함
+  if (!compA.isDirect && !compB.isDirect) {
+    const cleanAffA = compA.affiliation.replace(/\s+/g, "").toLowerCase();
+    const cleanAffB = compB.affiliation.replace(/\s+/g, "").toLowerCase();
+    if (cleanAffA !== cleanAffB) {
+      return false;
+    }
+  }
+
+  // 3. 본명 4글자(공백 무시) 비교
+  const cleanMainA = compA.main4.replace(/\s+/g, "").toLowerCase();
+  const cleanMainB = compB.main4.replace(/\s+/g, "").toLowerCase();
+  return cleanMainA === cleanMainB;
+}
+
+/**
+ * 검색어에 따라 직원을 필터링할 때, 직속 직원과 위탁(샤넬 등) 직원의 동명 혼동을 방지하는 정밀 검색 함수.
+ * - 특정 직원 선택 시(targetStaffName): 해당 직원과 동일인(소속 일치)만 정확히 매칭
+ * - 직속 이름(4글자 이하, 예: "하퍼 예슬")으로 검색 시 -> 직속 직원만 매칭 (위탁 샤넬 예슬 완전 제외)
+ * - 소속명(예: "샤넬")이나 위탁 전체 이름(예: "하퍼 예슬 샤넬")으로 검색 시 -> 해당 소속 위탁 직원만 매칭
+ */
+export function matchesStaffSearch(
+  staffFullName: string,
+  searchTerm: string,
+  targetStaffName?: string
+): boolean {
+  if (!staffFullName) return false;
+
+  // 특정 직원을 콕 찍어서 열람한 경우(targetStaffName 지정)
+  if (targetStaffName && targetStaffName.trim()) {
+    const cleanTarget = targetStaffName.trim().replace(/\s+/g, "").toLowerCase();
+    const cleanSearch = (searchTerm || "").trim().replace(/\s+/g, "").toLowerCase();
+    const targetComp = formatStaffNameComponents(targetStaffName);
+    const cleanTargetMain4 = targetComp.main4.replace(/\s+/g, "").toLowerCase();
+
+    // 검색어가 타깃 직원의 이름(또는 본명4글자)과 일치하거나 비어있는 경우, 타깃 직원과 동일인인 것만 정확히 반환
+    if (!cleanSearch || cleanSearch === cleanTarget || cleanSearch === cleanTargetMain4) {
+      return isSameStaffIdentity(staffFullName, targetStaffName);
+    }
+  }
+
+  if (!searchTerm || !searchTerm.trim()) return true;
+  const term = searchTerm.trim().toLowerCase();
+  const cleanTerm = term.replace(/\s+/g, "");
+
+  const staffComp = formatStaffNameComponents(staffFullName);
+  const cleanStaff = staffFullName.replace(/\s+/g, "").toLowerCase();
+  const cleanMain4 = staffComp.main4.replace(/\s+/g, "").toLowerCase();
+  const cleanAff = staffComp.affiliation.replace(/\s+/g, "").toLowerCase();
+
+  // 1. 완전 일치 (공백 무시)
+  if (cleanStaff === cleanTerm) return true;
+
+  // 2. 검색어가 "직속"인 경우
+  if (cleanTerm === "직속") {
+    return staffComp.isDirect;
+  }
+
+  // 3. 검색어가 "위탁"인 경우
+  if (cleanTerm === "위탁") {
+    return !staffComp.isDirect;
+  }
+
+  // 4. 검색어가 특정 소속명(예: "샤넬", "골드" 등)과 일치하는 경우
+  if (cleanTerm === cleanAff) {
+    return !staffComp.isDirect;
+  }
+
+  // 검색어의 소속 성분 분석
+  const searchComp = formatStaffNameComponents(searchTerm);
+
+  // 직속 직원의 경우:
+  // 검색어에 위탁 소속명이나 "위탁" 키워드가 포함되어 있다면 직속 직원은 절대 매칭하지 않음!
+  if (staffComp.isDirect) {
+    if (!searchComp.isDirect && searchComp.affiliation !== "직속") {
+      return false;
+    }
+    if (term.includes("위탁")) {
+      return false;
+    }
+    return cleanMain4.includes(cleanTerm) || cleanTerm.includes(cleanMain4);
+  }
+
+  // 위탁 직원의 경우 (예: "하퍼 예슬 샤넬"):
+  // 만약 검색어가 소속명이 명시되지 않은 직속 형식(4글자 이하 순수 이름, 예: "하퍼 예슬", "예슬")이라면,
+  // 직속 직원을 찾는 검색이므로 위탁 직원은 절대 매칭하지 않음!
+  if (searchComp.isDirect && cleanTerm.length <= 4) {
+    return false;
+  }
+
+  // 위탁 직원은 검색어에 본명이나 소속이 포함된 경우 매칭
+  if (cleanTerm.includes(cleanAff)) {
+    const termWithoutAff = cleanTerm.replace(cleanAff, "");
+    if (!termWithoutAff || cleanMain4.includes(termWithoutAff) || termWithoutAff.includes(cleanMain4)) {
+      return true;
+    }
+  }
+
+  if (cleanStaff.includes(cleanTerm)) {
+    return true;
+  }
+
+  return false;
 }

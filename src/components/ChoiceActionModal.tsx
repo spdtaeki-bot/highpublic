@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { format, addMinutes } from "date-fns";
 import { formatStaffNameComponents, cn } from "../lib/utils";
-import { DispatchRecord, BouncedRecord } from "../types";
+import { DispatchRecord, BouncedRecord, ActiveChoice } from "../types";
 
 export interface ChoiceActionModalProps {
   isOpen: boolean;
@@ -21,11 +21,35 @@ export interface ChoiceActionModalProps {
   staffNames: string[];
   initialEstablishmentName: string;
   initialTime?: string;
+  choiceEntryTime?: string;
+  activeChoices?: Record<string, ActiveChoice>;
   establishments?: (string | { name: string; id?: string })[];
   records?: DispatchRecord[];
   bouncedRecords?: BouncedRecord[];
   currentTime?: Date;
   onConfirm: (establishmentName: string, time: string) => Promise<void> | void;
+}
+
+function getMinuteDiff(startStr: string, endStr: string): number {
+  if (!startStr || !endStr) return 0;
+  const s = startStr.includes(":")
+    ? startStr.split(":")
+    : [startStr.slice(0, 2), startStr.slice(2)];
+  const e = endStr.includes(":")
+    ? endStr.split(":")
+    : [endStr.slice(0, 2), endStr.slice(2)];
+  const sh = parseInt(s[0], 10) || 0;
+  const sm = parseInt(s[1], 10) || 0;
+  const eh = parseInt(e[0], 10) || 0;
+  const em = parseInt(e[1], 10) || 0;
+
+  let diff = eh * 60 + em - (sh * 60 + sm);
+  if (diff < -720) {
+    diff += 1440;
+  } else if (diff > 720) {
+    diff -= 1440;
+  }
+  return diff;
 }
 
 export function ChoiceActionModal({
@@ -35,6 +59,8 @@ export function ChoiceActionModal({
   staffNames,
   initialEstablishmentName,
   initialTime,
+  choiceEntryTime,
+  activeChoices,
   establishments = [],
   records = [],
   bouncedRecords = [],
@@ -51,6 +77,7 @@ export function ChoiceActionModal({
   const [error, setError] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const timeInputRef = useRef<HTMLInputElement>(null);
 
   // Collect all known establishment names across establishments master, dispatch records, and bounced records
   const allKnownEstablishmentNames = useMemo(() => {
@@ -77,6 +104,31 @@ export function ChoiceActionModal({
       .slice(0, 15);
   }, [allKnownEstablishmentNames, establishmentName]);
 
+  const resolvedChoiceEntryTime = useMemo(() => {
+    if (choiceEntryTime?.trim()) return choiceEntryTime.trim();
+    if (activeChoices && staffNames && staffNames.length > 0) {
+      const times = staffNames
+        .map((name) => activeChoices[name]?.choiceTime?.trim())
+        .filter(Boolean);
+      const uniqueTimes = Array.from(new Set(times));
+      return uniqueTimes.join(", ");
+    }
+    return "";
+  }, [choiceEntryTime, activeChoices, staffNames]);
+
+  const nowTimeStr = format(currentTime || new Date(), "HH:mm");
+  const primaryChoiceTime = resolvedChoiceEntryTime.split(",")[0]?.trim() || "";
+
+  const currentDiffMins = useMemo(
+    () => (primaryChoiceTime ? getMinuteDiff(primaryChoiceTime, nowTimeStr) : 0),
+    [primaryChoiceTime, nowTimeStr],
+  );
+
+  const inputDiffMins = useMemo(
+    () => (primaryChoiceTime ? getMinuteDiff(primaryChoiceTime, time) : 0),
+    [primaryChoiceTime, time],
+  );
+
   useEffect(() => {
     if (isOpen) {
       setEstablishmentName(initialEstablishmentName || "");
@@ -84,9 +136,6 @@ export function ChoiceActionModal({
       setError(null);
       setIsSubmitting(false);
       setIsDropdownOpen(false);
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 100);
     }
   }, [isOpen, initialEstablishmentName, initialTime, currentTime]);
 
@@ -101,6 +150,22 @@ export function ChoiceActionModal({
       formatted = digits.slice(0, 2) + ":" + digits.slice(2);
     }
     setTime(formatted);
+  };
+
+  const handleSelectEstablishment = (name: string) => {
+    setEstablishmentName(name);
+    setIsDropdownOpen(false);
+    if (error) setError(null);
+    inputRef.current?.blur();
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    setTimeout(() => {
+      inputRef.current?.blur();
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+    }, 50);
   };
 
   const adjustMinutes = (deltaMinutes: number) => {
@@ -297,8 +362,7 @@ export function ChoiceActionModal({
                     filteredEstablishments.length > 0
                   ) {
                     e.preventDefault();
-                    setEstablishmentName(filteredEstablishments[0]);
-                    setIsDropdownOpen(false);
+                    handleSelectEstablishment(filteredEstablishments[0]);
                   } else if (e.key === "Escape") {
                     setIsDropdownOpen(false);
                   }
@@ -336,9 +400,11 @@ export function ChoiceActionModal({
                     type="button"
                     onMouseDown={(e) => {
                       e.preventDefault();
-                      setEstablishmentName(name);
-                      setIsDropdownOpen(false);
-                      if (error) setError(null);
+                      handleSelectEstablishment(name);
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleSelectEstablishment(name);
                     }}
                     className={cn(
                       "w-full px-2.5 py-1.5 text-left text-xs font-bold rounded-xl flex items-center justify-between transition-colors cursor-pointer",
@@ -364,29 +430,107 @@ export function ChoiceActionModal({
             )}
           </div>
 
+          {/* Choice Entry Time & Gap Info */}
+          {resolvedChoiceEntryTime && (
+            <div className="p-2.5 bg-purple-50/70 border border-purple-200/80 rounded-2xl space-y-1 shadow-2xs">
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="px-1.5 py-0.5 rounded-md bg-purple-200/80 text-purple-900 text-[10px] font-black">
+                    초이스 들어간 시간
+                  </span>
+                  <span className="font-mono font-black text-purple-950 text-sm">
+                    {resolvedChoiceEntryTime}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-bold text-stone-500">현재와 갭:</span>
+                  <span
+                    className={cn(
+                      "px-2 py-0.5 rounded-full text-xs font-black font-mono shadow-2xs",
+                      currentDiffMins < 0
+                        ? "bg-stone-200 text-stone-700"
+                        : currentDiffMins >= 40
+                          ? "bg-rose-100 text-rose-700 border border-rose-200"
+                          : currentDiffMins >= 20
+                            ? "bg-amber-100 text-amber-800 border border-amber-200"
+                            : "bg-emerald-100 text-emerald-800 border border-emerald-200",
+                    )}
+                  >
+                    {currentDiffMins >= 0
+                      ? `+${currentDiffMins}분`
+                      : `${currentDiffMins}분`}{" "}
+                    경과
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between pt-1 border-t border-purple-200/50 text-[11px]">
+                <span className="text-stone-500 font-bold">입력 시간 기준 소요:</span>
+                <span className="font-mono font-black text-purple-900">
+                  {inputDiffMins >= 0 ? `+${inputDiffMins}분` : `${inputDiffMins}분`}
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Time Input */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-black text-stone-700 flex items-center justify-between">
-              <span className="flex items-center gap-1">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-black text-stone-700 flex items-center gap-1">
                 <Clock className="w-3.5 h-3.5 text-stone-500" />
                 <span>
                   {isProgress ? "진행 시간" : "튕김 시간"}{" "}
                   <span className="text-rose-500">*</span>
                 </span>
-              </span>
-              <span className="text-[10px] text-stone-400 font-normal">
-                기본값: 현재시간
-              </span>
-            </label>
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  setTime(format(currentTime || new Date(), "HH:mm"))
+                }
+                className={cn(
+                  "text-[10px] font-black px-2 py-0.5 rounded transition-all cursor-pointer",
+                  isProgress
+                    ? "text-emerald-700 bg-emerald-50 hover:bg-emerald-100"
+                    : "text-rose-700 bg-rose-50 hover:bg-rose-100",
+                )}
+              >
+                현재시간 적용
+              </button>
+            </div>
             <div className="flex items-center gap-1.5">
               <input
+                ref={timeInputRef}
                 type="text"
+                inputMode="numeric"
                 value={time}
                 onChange={(e) => handleTimeChange(e.target.value)}
+                onFocus={(e) => {
+                  const target = e.target;
+                  target.select();
+                  setTimeout(() => {
+                    try {
+                      target.select();
+                      target.setSelectionRange(0, 9999);
+                    } catch {}
+                  }, 20);
+                }}
+                onMouseUp={(e) => {
+                  // Keep entire text selected on click without being cleared by mouseup
+                  if (document.activeElement === e.currentTarget) {
+                    e.currentTarget.select();
+                  }
+                }}
+                onClick={(e) => {
+                  try {
+                    const target = e.target as HTMLInputElement;
+                    target.select();
+                    target.setSelectionRange(0, 9999);
+                  } catch {}
+                }}
                 placeholder="HH:mm"
                 maxLength={5}
                 className={cn(
-                  "w-28 px-3 py-2 bg-white border rounded-2xl text-center text-sm font-black font-mono tracking-wider transition-all shadow-2xs",
+                  "w-24 sm:w-28 px-2.5 py-2 bg-white border rounded-2xl text-center text-sm font-black font-mono tracking-wider transition-all shadow-2xs",
                   isProgress
                     ? "border-stone-300 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                     : "border-stone-300 focus:outline-hidden focus:ring-2 focus:ring-rose-500 focus:border-rose-500",
@@ -395,26 +539,35 @@ export function ChoiceActionModal({
               <div className="flex items-center gap-1 flex-1">
                 <button
                   type="button"
-                  onClick={() => adjustMinutes(-10)}
+                  onClick={() => adjustMinutes(-5)}
                   className="flex-1 py-2 px-1 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl text-[11px] font-black transition-all active:scale-95 cursor-pointer"
+                  title="5분 전"
                 >
-                  -10분
+                  -5분
                 </button>
                 <button
                   type="button"
-                  onClick={() => adjustMinutes(10)}
+                  onClick={() => adjustMinutes(5)}
                   className="flex-1 py-2 px-1 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl text-[11px] font-black transition-all active:scale-95 cursor-pointer"
+                  title="5분 후"
                 >
-                  +10분
+                  +5분
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    setTime(format(currentTime || new Date(), "HH:mm"))
-                  }
-                  className="py-2 px-2 bg-stone-200 hover:bg-stone-300 text-stone-800 rounded-xl text-[11px] font-black transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                  onClick={() => adjustMinutes(-1)}
+                  className="flex-1 py-2 px-1 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl text-[11px] font-black transition-all active:scale-95 cursor-pointer"
+                  title="1분 전"
                 >
-                  현재
+                  -1분
+                </button>
+                <button
+                  type="button"
+                  onClick={() => adjustMinutes(1)}
+                  className="flex-1 py-2 px-1 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl text-[11px] font-black transition-all active:scale-95 cursor-pointer"
+                  title="1분 후"
+                >
+                  +1분
                 </button>
               </div>
             </div>

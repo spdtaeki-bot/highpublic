@@ -12,7 +12,10 @@ import {
   ChevronDown,
   ChevronUp,
   AlertCircle,
+  Camera,
+  X,
 } from "lucide-react";
+import * as htmlToImage from "html-to-image";
 import { motion, AnimatePresence } from "motion/react";
 import { Timestamp } from "firebase/firestore";
 import { clsx, type ClassValue } from "clsx";
@@ -151,6 +154,36 @@ const getRecordCollectionHistory = (
   r: Partial<DispatchRecord>,
 ): CollectionHistoryEntry[] => {
   if (!r) return [];
+
+  if (
+    r.collectionHistory &&
+    Array.isArray(r.collectionHistory) &&
+    r.collectionHistory.length > 0
+  ) {
+    const valid = r.collectionHistory.filter(
+      (e) => e && ((e.amount !== undefined && e.amount > 0) || e.collectedAt),
+    );
+    if (valid.length > 0) {
+      return valid;
+    }
+  }
+
+  if (r.isPass) {
+    const targetTotal =
+      r.collectedAmount !== undefined && r.collectedAmount > 0
+        ? r.collectedAmount
+        : r.totalAmount || 0;
+    return [
+      {
+        collectedAt: r.collectedAt || (r as any).createdAt || null,
+        amount: targetTotal,
+        paymentMethod: r.paymentMethod !== "UNPAID" ? r.paymentMethod : undefined,
+        depositorName: r.depositorName,
+        note: "패스 수금",
+      },
+    ];
+  }
+
   const targetTotal =
     r.paymentMethod !== "UNPAID" && r.collectedAmount !== undefined
       ? r.collectedAmount
@@ -163,54 +196,46 @@ const getRecordCollectionHistory = (
   }
 
   let rawList: CollectionHistoryEntry[] = [];
-  if (
-    r.collectionHistory &&
-    Array.isArray(r.collectionHistory) &&
-    r.collectionHistory.length > 0
-  ) {
-    rawList = r.collectionHistory;
-  } else {
-    if (r.collectedAt) {
-      rawList.push({
-        collectedAt: r.collectedAt,
-        amount:
-          r.collectedAmount !== undefined
-            ? r.collectedAmount
-            : r.totalAmount || 0,
-        paymentMethod:
-          r.paymentMethod !== "UNPAID" ? r.paymentMethod : undefined,
-        depositorName: r.depositorName,
-        note: "1차 수금",
-      });
-    }
-    if (r.additionalCollectedAt) {
-      const t1 = r.collectedAt
-        ? (r.collectedAt.toDate
-            ? r.collectedAt.toDate()
-            : new Date(r.collectedAt)
-          ).getTime()
-        : 0;
-      const t2 = (
-        r.additionalCollectedAt.toDate
-          ? r.additionalCollectedAt.toDate()
-          : new Date(r.additionalCollectedAt)
-      ).getTime();
-      if (!isNaN(t2) && t2 !== t1) {
-        const firstAmt =
-          rawList.length > 0 && rawList[0].amount !== undefined
-            ? rawList[0].amount
-            : 0;
-        const diffAmt = Math.max(0, targetTotal - firstAmt);
-        if (diffAmt > 0) {
-          rawList.push({
-            collectedAt: r.additionalCollectedAt,
-            amount: diffAmt,
-            paymentMethod:
-              r.paymentMethod !== "UNPAID" ? r.paymentMethod : undefined,
-            depositorName: r.depositorName,
-            note: "2차 추가수금",
-          });
-        }
+  if (r.collectedAt) {
+    rawList.push({
+      collectedAt: r.collectedAt,
+      amount:
+        r.collectedAmount !== undefined
+          ? r.collectedAmount
+          : r.totalAmount || 0,
+      paymentMethod:
+        r.paymentMethod !== "UNPAID" ? r.paymentMethod : undefined,
+      depositorName: r.depositorName,
+      note: "1차 수금",
+    });
+  }
+  if (r.additionalCollectedAt) {
+    const t1 = r.collectedAt
+      ? (r.collectedAt.toDate
+          ? r.collectedAt.toDate()
+          : new Date(r.collectedAt)
+        ).getTime()
+      : 0;
+    const t2 = (
+      r.additionalCollectedAt.toDate
+        ? r.additionalCollectedAt.toDate()
+        : new Date(r.additionalCollectedAt)
+    ).getTime();
+    if (!isNaN(t2) && t2 !== t1) {
+      const firstAmt =
+        rawList.length > 0 && rawList[0].amount !== undefined
+          ? rawList[0].amount
+          : 0;
+      const diffAmt = Math.max(0, targetTotal - firstAmt);
+      if (diffAmt > 0) {
+        rawList.push({
+          collectedAt: r.additionalCollectedAt,
+          amount: diffAmt,
+          paymentMethod:
+            r.paymentMethod !== "UNPAID" ? r.paymentMethod : undefined,
+          depositorName: r.depositorName,
+          note: "2차 추가수금",
+        });
       }
     }
   }
@@ -293,6 +318,70 @@ export function UnpaidDetailView({
 
   const [batchAdditionalCollectingKey, setBatchAdditionalCollectingKey] =
     useState<string | null>(null);
+
+  // Screenshot Capture State
+  const [isCapturing, setIsCapturing] = useState<string | null>(null);
+
+  // Capture Single Establishment Unpaid Card or Entire Date Group
+  const handleCaptureEstablishment = async (
+    elementId: string,
+    estName: string,
+    dateStr: string,
+  ) => {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    setIsCapturing(elementId);
+    try {
+      const dataUrl = await htmlToImage.toPng(element, {
+        backgroundColor: "#ffffff",
+        pixelRatio: 3,
+        style: {
+          transform: "none",
+        },
+        filter: (node) => {
+          if (
+            node instanceof HTMLElement &&
+            (node.dataset.html2canvasIgnore === "true" ||
+              node.getAttribute("data-capture-ignore") === "true")
+          ) {
+            return false;
+          }
+          return true;
+        },
+      });
+
+      const formattedDatePart = dateStr ? dateStr.replace(/[^0-9]/g, "") : "";
+      const filename = `${estName}_${formattedDatePart || dateStr}_미수금내역.png`;
+
+      if (navigator.canShare && navigator.share) {
+        try {
+          const res = await fetch(dataUrl);
+          const blob = await res.blob();
+          const file = new File([blob], filename, { type: "image/png" });
+          if (navigator.canShare({ files: [file] })) {
+            await navigator.share({
+              title: `${estName} 미수금 내역 (${dateStr})`,
+              text: `[${dateStr}] ${estName} 미수금 내역`,
+              files: [file],
+            });
+            return;
+          }
+        } catch (shareErr) {
+          console.warn("Share failed, fallback to download", shareErr);
+        }
+      }
+
+      const link = document.createElement("a");
+      link.download = filename;
+      link.href = dataUrl;
+      link.click();
+    } catch (e) {
+      console.error("Capture failed", e);
+      setAlertConfig({ message: "이미지 캡쳐에 실패했습니다." });
+    } finally {
+      setIsCapturing(null);
+    }
+  };
 
   // Combine and de-duplicate records that have unpaid history or are current
   const combinedRecords = useMemo(() => {
@@ -898,6 +987,143 @@ export function UnpaidDetailView({
     });
   };
 
+  // Cancel a single collection round or individual collection
+  const handleCancelSingleRound = (
+    estName: string,
+    records: DispatchRecord[],
+    roundItem: RoundBreakdownItem,
+    roundIdx: number,
+  ) => {
+    const roundTitle =
+      roundItem.label ||
+      (roundItem.round ? `${roundItem.round}차 수금` : "수금");
+
+    setConfirmConfig({
+      message: `[${estName}] ${roundTitle} (${roundItem.amount.toLocaleString()}원)을 취소하고 미수로 되돌리시겠습니까?`,
+      action: async () => {
+        try {
+          const currentRecords = records.map((r) => {
+            const found = combinedRecords.find((x) => x.id === r.id);
+            return found || r;
+          });
+
+          // Target the specific records that belong to this round
+          let targetRecs = currentRecords;
+          if (roundItem.recordIds && roundItem.recordIds.length > 0) {
+            targetRecs = currentRecords.filter(
+              (r) => r.id && roundItem.recordIds!.includes(r.id),
+            );
+          } else if (roundItem.recordId) {
+            targetRecs = currentRecords.filter(
+              (r) => r.id === roundItem.recordId,
+            );
+          } else if (roundItem.staffName) {
+            targetRecs = currentRecords.filter(
+              (r) => r.staffName === roundItem.staffName,
+            );
+          }
+
+          if (targetRecs.length === 0) {
+            targetRecs = currentRecords;
+          }
+
+          const targetHistIdx = roundItem.historyIndex;
+          const updatePromises = targetRecs.map(async (r) => {
+            if (!r.id) return;
+            if (
+              r.collectionHistory &&
+              Array.isArray(r.collectionHistory) &&
+              r.collectionHistory.length > 1 &&
+              targetHistIdx !== undefined &&
+              r.collectionHistory[targetHistIdx]
+            ) {
+              const newHist = r.collectionHistory.filter(
+                (_, idx) => idx !== targetHistIdx,
+              );
+              if (newHist.length === 0) {
+                const updates: Partial<DispatchRecord> = {
+                  paymentMethod: "UNPAID",
+                  collectedAt: null,
+                  additionalCollectedAt: null,
+                  collectionHistory: [],
+                  isPass: false,
+                  collectedAmount: undefined,
+                  depositorName: null,
+                  wasUnpaid: true,
+                  isDispatchBoxCollection: false,
+                };
+                await applyRecordUpdate(r.id, updates as any);
+              } else {
+                const firstEntry = newHist[0];
+                const lastEntry = newHist[newHist.length - 1];
+                const updates: Partial<DispatchRecord> = {
+                  paymentMethod: firstEntry.paymentMethod || "TRANSFER",
+                  collectedAt: firstEntry.collectedAt || null,
+                  additionalCollectedAt:
+                    newHist.length > 1 ? lastEntry.collectedAt : null,
+                  collectionHistory: newHist,
+                  depositorName: firstEntry.depositorName || null,
+                  collectedAmount: undefined,
+                };
+                await applyRecordUpdate(r.id, updates as any);
+              }
+            } else {
+              const updates: Partial<DispatchRecord> = {
+                paymentMethod: "UNPAID",
+                collectedAt: null,
+                additionalCollectedAt: null,
+                collectionHistory: [],
+                isPass: false,
+                collectedAmount: undefined,
+                depositorName: null,
+                wasUnpaid: true,
+                isDispatchBoxCollection: false,
+              };
+              await applyRecordUpdate(r.id, updates as any);
+            }
+          });
+
+          await Promise.all(updatePromises);
+        } catch (e) {
+          console.error("개별 수금 취소 오류:", e);
+          setAlertConfig({
+            message: `수금 취소 중 오류: ${getErrorMessage(e, "수금 취소 중 오류가 발생했습니다.")}`,
+          });
+        }
+      },
+    });
+  };
+
+  // Individual staff record on-site cancel
+  const handleCancelRecordCollection = (r: DispatchRecord) => {
+    if (!r || !r.id) return;
+    const paidAmt = r.totalAmount || 0;
+    setConfirmConfig({
+      message: `[${r.establishmentName} - ${r.staffName}] 수금 (${paidAmt.toLocaleString()}원)을 취소하고 미수로 되돌리시겠습니까?`,
+      action: async () => {
+        try {
+          const updates: Partial<DispatchRecord> = {
+            paymentMethod: "UNPAID",
+            collectedAt: null,
+            additionalCollectedAt: null,
+            collectionHistory: [],
+            isPass: false,
+            collectedAmount: undefined,
+            depositorName: null,
+            wasUnpaid: true,
+            isDispatchBoxCollection: false,
+          };
+          await applyRecordUpdate(r.id!, updates as any);
+        } catch (e) {
+          console.error("직원 수금 취소 오류:", e);
+          setAlertConfig({
+            message: `수금 취소 중 오류: ${getErrorMessage(e, "수금 취소 중 오류가 발생했습니다.")}`,
+          });
+        }
+      },
+    });
+  };
+
   return (
     <div className="space-y-5 animate-in fade-in duration-200">
       {/* Top Header & KPI Metric Dashboard */}
@@ -1280,9 +1506,11 @@ export function UnpaidDetailView({
               (sum, e) => sum + e.totalCollected,
               0,
             );
+            const dateCardId = `unpaid-date-card-${date}`;
 
             return (
               <div
+                id={dateCardId}
                 key={date}
                 className="bg-white border-2 border-stone-200 rounded-3xl overflow-hidden shadow-xs transition-all"
               >
@@ -1306,7 +1534,7 @@ export function UnpaidDetailView({
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 sm:gap-3">
                     <div className="flex items-center gap-2 text-xs font-black">
                       {dateTotalUnpaid > 0 ? (
                         <span className="px-2.5 py-1 bg-red-100 text-red-700 rounded-lg border border-red-200 animate-pulse">
@@ -1319,7 +1547,39 @@ export function UnpaidDetailView({
                       )}
                     </div>
 
-                    <div className="text-stone-400">
+                    {/* Overall Date Capture Button */}
+                    <button
+                      type="button"
+                      data-html2canvas-ignore="true"
+                      data-capture-ignore="true"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isExpanded) {
+                          toggleDateExpand(date);
+                        }
+                        setTimeout(() => {
+                          handleCaptureEstablishment(
+                            dateCardId,
+                            `미수금전체_${date}`,
+                            date,
+                          );
+                        }, 150);
+                      }}
+                      disabled={isCapturing === dateCardId}
+                      className="px-2 py-1 bg-white hover:bg-stone-200 text-stone-700 rounded-lg text-xs font-black shadow-2xs border border-stone-300 active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
+                      title={`${date} 전체 미수금 내역 캡쳐`}
+                    >
+                      <Camera className="w-3.5 h-3.5 text-stone-600" />
+                      <span className="hidden sm:inline">
+                        {isCapturing === dateCardId ? "캡쳐중..." : "전체캡쳐"}
+                      </span>
+                    </button>
+
+                    <div
+                      data-html2canvas-ignore="true"
+                      data-capture-ignore="true"
+                      className="text-stone-400"
+                    >
                       {isExpanded ? (
                         <ChevronUp className="w-5 h-5" />
                       ) : (
@@ -1367,8 +1627,11 @@ export function UnpaidDetailView({
                         batchAdditionalCollectingKey ===
                         `${date}_${est.estName}`;
 
+                      const cardId = `unpaid-est-card-${date}-${encodeURIComponent(est.estName).replace(/%/g, "_")}`;
+
                       return (
                         <div
+                          id={cardId}
                           key={est.estName}
                           className={cn(
                             "rounded-2xl border-2 overflow-hidden shadow-sm transition-all bg-white",
@@ -1391,8 +1654,8 @@ export function UnpaidDetailView({
                             )}
                           >
                             {/* Top row: Name & Action Buttons */}
-                            <div className="flex flex-wrap items-center justify-between gap-2 w-full min-w-0">
-                              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 w-full min-w-0">
+                              <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-wrap">
                                 <Building2
                                   className={cn(
                                     "w-5 h-5 shrink-0",
@@ -1403,10 +1666,10 @@ export function UnpaidDetailView({
                                         : "text-red-600",
                                   )}
                                 />
-                                <span className="font-black text-stone-900 text-base sm:text-lg whitespace-nowrap truncate">
+                                <span className="font-black text-stone-900 text-base sm:text-lg whitespace-nowrap">
                                   {est.estName}
                                 </span>
-                                <span className="text-xs font-black text-stone-400">
+                                <span className="text-xs font-black text-stone-400 shrink-0">
                                   ({est.records.length}건)
                                 </span>
                                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-white/90 text-stone-800 border border-stone-300 rounded-lg text-xs font-black shrink-0 shadow-2xs">
@@ -1419,10 +1682,12 @@ export function UnpaidDetailView({
                                 </span>
                               </div>
 
-                              {/* Batch Action Buttons */}
-                              <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                              {/* Batch Action Buttons & Capture Button */}
+                              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
                                 {isBatchCollectingActive ? (
                                   <button
+                                    data-html2canvas-ignore="true"
+                                    data-capture-ignore="true"
                                     onClick={() => setBatchCollecting(null)}
                                     className="px-2.5 py-1.5 bg-stone-200 text-stone-700 rounded-xl text-xs font-black shadow-2xs hover:bg-stone-300 transition-all cursor-pointer"
                                   >
@@ -1435,6 +1700,8 @@ export function UnpaidDetailView({
                                     ) && (
                                       <>
                                         <button
+                                          data-html2canvas-ignore="true"
+                                          data-capture-ignore="true"
                                           onClick={() =>
                                             setBatchCollecting({
                                               dateKey: date,
@@ -1442,11 +1709,13 @@ export function UnpaidDetailView({
                                               method: "CASH",
                                             })
                                           }
-                                          className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
+                                          className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
                                         >
                                           현금전체
                                         </button>
                                         <button
+                                          data-html2canvas-ignore="true"
+                                          data-capture-ignore="true"
                                           onClick={() =>
                                             setBatchCollecting({
                                               dateKey: date,
@@ -1454,7 +1723,7 @@ export function UnpaidDetailView({
                                               method: "TRANSFER",
                                             })
                                           }
-                                          className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
+                                          className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
                                         >
                                           계좌전체
                                         </button>
@@ -1463,6 +1732,8 @@ export function UnpaidDetailView({
 
                                     <button
                                       type="button"
+                                      data-html2canvas-ignore="true"
+                                      data-capture-ignore="true"
                                       onClick={() => {
                                         const key = `${date}_${est.estName}`;
                                         setBatchAdditionalCollectingKey(
@@ -1471,7 +1742,7 @@ export function UnpaidDetailView({
                                             : key,
                                         );
                                       }}
-                                      className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
+                                      className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
                                     >
                                       ➕ 추가수금/조정
                                     </button>
@@ -1489,17 +1760,41 @@ export function UnpaidDetailView({
                                         r.collectedAmount > 0),
                                   )) && (
                                   <button
+                                    data-html2canvas-ignore="true"
+                                    data-capture-ignore="true"
                                     onClick={() =>
                                       handleEstablishmentAllCancel(
                                         est.estName,
                                         est.records,
                                       )
                                     }
-                                    className="px-2.5 py-1.5 bg-stone-100 hover:bg-red-50 hover:text-red-700 text-stone-600 rounded-xl text-xs font-black shadow-xs border border-stone-200 active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
+                                    className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-stone-100 hover:bg-red-50 hover:text-red-700 text-stone-600 rounded-xl text-xs font-black shadow-xs border border-stone-200 active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
                                   >
                                     전체 취소
                                   </button>
                                 )}
+
+                                {/* Capture Badge/Button */}
+                                <button
+                                  type="button"
+                                  data-html2canvas-ignore="true"
+                                  data-capture-ignore="true"
+                                  onClick={() =>
+                                    handleCaptureEstablishment(
+                                      cardId,
+                                      est.estName,
+                                      date,
+                                    )
+                                  }
+                                  disabled={isCapturing === cardId}
+                                  className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-white hover:bg-stone-100 text-stone-800 rounded-xl text-xs font-black shadow-2xs border border-stone-300 active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
+                                  title={`${est.estName} (${date}) 미수금 내역 이미지 캡쳐 및 공유`}
+                                >
+                                  <Camera className="w-3.5 h-3.5 text-stone-600 shrink-0" />
+                                  <span>
+                                    {isCapturing === cardId ? "캡쳐중..." : "캡쳐"}
+                                  </span>
+                                </button>
                               </div>
                             </div>
 
@@ -1584,6 +1879,29 @@ export function UnpaidDetailView({
                                           [{rd.depositorName}]
                                         </span>
                                       )}
+                                      {rd.staffName && (
+                                        <span className="text-[10px] font-bold text-teal-800">
+                                          ({rd.staffName})
+                                        </span>
+                                      )}
+                                      <button
+                                        type="button"
+                                        data-html2canvas-ignore="true"
+                                        data-capture-ignore="true"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleCancelSingleRound(
+                                            est.estName,
+                                            est.records,
+                                            rd,
+                                            rdIdx,
+                                          );
+                                        }}
+                                        className="ml-0.5 p-0.5 rounded-full hover:bg-black/10 text-stone-400 hover:text-red-700 transition-colors cursor-pointer"
+                                        title={`${rd.label || (rd.round ? `${rd.round}차` : "수금")} 취소`}
+                                      >
+                                        <X className="w-3.5 h-3.5" />
+                                      </button>
                                     </span>
                                   ))}
                                 </div>
@@ -1593,7 +1911,11 @@ export function UnpaidDetailView({
 
                           {/* Batch Collect Form Modal / Inline Box */}
                           {isBatchCollectingActive && (
-                            <div className="p-4 bg-stone-50 border-b border-stone-200">
+                            <div
+                              data-html2canvas-ignore="true"
+                              data-capture-ignore="true"
+                              className="p-4 bg-stone-50 border-b border-stone-200"
+                            >
                               <BatchCollectForm
                                 initialMethod={batchCollecting.method}
                                 totalUnpaidAmount={est.records
@@ -1636,7 +1958,11 @@ export function UnpaidDetailView({
 
                           {/* Batch Additional Collect Form */}
                           {isBatchAdditionalActive && (
-                            <div className="p-4 border-b border-amber-200 bg-amber-50/60">
+                            <div
+                              data-html2canvas-ignore="true"
+                              data-capture-ignore="true"
+                              className="p-4 border-b border-amber-200 bg-amber-50/60"
+                            >
                               <EstablishmentAdditionalCollectForm
                                 estName={est.estName}
                                 originalTotal={estTotalRequested}
@@ -1736,13 +2062,13 @@ export function UnpaidDetailView({
                                   {/* Left: Staff Info & Work Time */}
                                   <div className="flex flex-col gap-1 min-w-0 flex-1">
                                     <div className="flex flex-wrap items-center gap-2">
-                                      <span className="font-black text-stone-900 text-sm sm:text-base">
+                                      <span className="font-black text-stone-900 text-sm sm:text-base whitespace-nowrap">
                                         {r.staffName}
                                       </span>
 
                                       <span
                                         className={cn(
-                                          "text-[10px] font-black px-1.5 py-0.2 rounded text-white shadow-2xs",
+                                          "text-[10px] font-black px-1.5 py-0.2 rounded text-white shadow-2xs whitespace-nowrap shrink-0",
                                           r.systemType === "TABLE"
                                             ? "bg-emerald-600"
                                             : r.systemType === "PUBLIC"
@@ -1758,11 +2084,11 @@ export function UnpaidDetailView({
                                       </span>
 
                                       {isDirect ? (
-                                        <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded">
+                                        <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded whitespace-nowrap shrink-0">
                                           직속
                                         </span>
                                       ) : (
-                                        <span className="text-[10px] font-bold text-stone-600 bg-stone-100 px-1.5 py-0.2 rounded">
+                                        <span className="text-[10px] font-bold text-stone-600 bg-stone-100 px-1.5 py-0.2 rounded whitespace-nowrap shrink-0">
                                           위탁
                                         </span>
                                       )}
@@ -1771,8 +2097,22 @@ export function UnpaidDetailView({
                                       {(() => {
                                         if (r.isPass) {
                                           return (
-                                            <span className="inline-flex items-center text-[10px] font-black text-stone-600 bg-stone-100 border border-stone-300 px-1.5 py-0.2 rounded">
-                                              패스
+                                            <span className="inline-flex items-center gap-1 text-[11px] font-black text-stone-700 bg-stone-100 border border-stone-300 px-2 py-0.5 rounded-md shadow-2xs whitespace-nowrap shrink-0">
+                                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-stone-500 opacity-80" />
+                                              <span>패스</span>
+                                              <button
+                                                type="button"
+                                                data-html2canvas-ignore="true"
+                                                data-capture-ignore="true"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleCancelRecordCollection(r);
+                                                }}
+                                                className="ml-0.5 p-0.5 rounded hover:bg-black/10 text-stone-400 hover:text-red-700 transition-colors cursor-pointer"
+                                                title="패스 수금 취소 (미수로 되돌리기)"
+                                              >
+                                                <X className="w-3 h-3" />
+                                              </button>
                                             </span>
                                           );
                                         }
@@ -1797,7 +2137,7 @@ export function UnpaidDetailView({
 
                                         if (onSiteEntries.length > 0) {
                                           return (
-                                            <div className="flex items-center gap-1 flex-wrap">
+                                            <div className="flex items-center gap-1 flex-wrap shrink-0">
                                               {onSiteEntries.map((entry, hIdx) => {
                                                 let timeStr = "";
                                                 if (entry.collectedAt) {
@@ -1816,7 +2156,7 @@ export function UnpaidDetailView({
                                                   <span
                                                     key={hIdx}
                                                     className={cn(
-                                                      "inline-flex items-center gap-1 text-[11px] font-black px-2 py-0.5 rounded-md shadow-2xs border",
+                                                      "inline-flex items-center gap-1 text-[11px] font-black px-2 py-0.5 rounded-md shadow-2xs border whitespace-nowrap shrink-0",
                                                       isTransfer
                                                         ? "text-blue-800 bg-blue-100/90 border-blue-300"
                                                         : "text-emerald-800 bg-emerald-100/90 border-emerald-300"
@@ -1839,6 +2179,19 @@ export function UnpaidDetailView({
                                                         [{entry.depositorName}]
                                                       </span>
                                                     )}
+                                                    <button
+                                                      type="button"
+                                                      data-html2canvas-ignore="true"
+                                                      data-capture-ignore="true"
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleCancelRecordCollection(r);
+                                                      }}
+                                                      className="ml-0.5 p-0.5 rounded hover:bg-black/10 text-stone-400 hover:text-red-700 transition-colors cursor-pointer"
+                                                      title="현장 수금 취소 (미수로 되돌리기)"
+                                                    >
+                                                      <X className="w-3 h-3" />
+                                                    </button>
                                                   </span>
                                                 );
                                               })}
@@ -1848,7 +2201,7 @@ export function UnpaidDetailView({
 
                                         if (r.paymentMethod === "CASH") {
                                           return (
-                                            <span className="inline-flex items-center gap-1 text-[11px] font-black text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-2 py-0.5 rounded-md shadow-2xs">
+                                            <span className="inline-flex items-center gap-1 text-[11px] font-black text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-2 py-0.5 rounded-md shadow-2xs whitespace-nowrap shrink-0">
                                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                                               <span>현장 현금수금</span>
                                               {r.collectedAt && (
@@ -1865,13 +2218,26 @@ export function UnpaidDetailView({
                                                   })()})
                                                 </span>
                                               )}
+                                              <button
+                                                type="button"
+                                                data-html2canvas-ignore="true"
+                                                data-capture-ignore="true"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleCancelRecordCollection(r);
+                                                }}
+                                                className="ml-0.5 p-0.5 rounded hover:bg-black/10 text-stone-400 hover:text-red-700 transition-colors cursor-pointer"
+                                                title="현장 현금수금 취소 (미수로 되돌리기)"
+                                              >
+                                                <X className="w-3 h-3" />
+                                              </button>
                                             </span>
                                           );
                                         }
 
                                         if (r.paymentMethod === "TRANSFER") {
                                           return (
-                                            <span className="inline-flex items-center gap-1 text-[11px] font-black text-blue-800 bg-blue-100/90 border border-blue-300 px-2 py-0.5 rounded-md shadow-2xs">
+                                            <span className="inline-flex items-center gap-1 text-[11px] font-black text-blue-800 bg-blue-100/90 border border-blue-300 px-2 py-0.5 rounded-md shadow-2xs whitespace-nowrap shrink-0">
                                               <CheckCircle2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                                               <span>현장 계좌수금</span>
                                               {r.collectedAt && (
@@ -1893,6 +2259,19 @@ export function UnpaidDetailView({
                                                   [{r.depositorName}]
                                                 </span>
                                               )}
+                                              <button
+                                                type="button"
+                                                data-html2canvas-ignore="true"
+                                                data-capture-ignore="true"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleCancelRecordCollection(r);
+                                                }}
+                                                className="ml-0.5 p-0.5 rounded hover:bg-black/10 text-stone-400 hover:text-red-700 transition-colors cursor-pointer"
+                                                title="현장 계좌수금 취소 (미수로 되돌리기)"
+                                              >
+                                                <X className="w-3 h-3" />
+                                              </button>
                                             </span>
                                           );
                                         }
@@ -1900,28 +2279,28 @@ export function UnpaidDetailView({
                                         return null;
                                       })()}
 
-                                      <span className="font-black text-sm ml-auto sm:ml-0 text-stone-900">
+                                      <span className="font-black text-sm ml-auto sm:ml-0 text-stone-900 whitespace-nowrap shrink-0">
                                         {(r.totalAmount || 0).toLocaleString()}원
                                       </span>
                                     </div>
 
                                     {/* Work info chip */}
-                                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-stone-500 font-bold">
-                                      <div className="flex items-center gap-1">
-                                        <Clock className="w-3 h-3 text-stone-400" />
-                                        <span>
+                                    <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs text-stone-500 font-bold whitespace-nowrap flex-nowrap shrink-0">
+                                      <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
+                                        <Clock className="w-3 h-3 text-stone-400 shrink-0" />
+                                        <span className="whitespace-nowrap">
                                           {startTimeStr && endTimeStr
                                             ? `${startTimeStr} ~ ${endTimeStr}`
                                             : "시간 미기록"}
                                         </span>
                                         {durationFormatted && (
-                                          <span className="text-stone-600 font-bold">
+                                          <span className="text-stone-600 font-bold whitespace-nowrap">
                                             ({durationFormatted})
                                           </span>
                                         )}
                                       </div>
-                                      <span>•</span>
-                                      <span className="text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded font-black">
+                                      <span className="text-stone-300 shrink-0">•</span>
+                                      <span className="text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-black whitespace-nowrap shrink-0 inline-flex items-center">
                                         {unitCount}개
                                       </span>
                                     </div>
@@ -1929,7 +2308,11 @@ export function UnpaidDetailView({
 
                                   {/* Right: Optional Edit Button */}
                                   {onEditRecord && (
-                                    <div className="flex items-center shrink-0">
+                                    <div
+                                      data-html2canvas-ignore="true"
+                                      data-capture-ignore="true"
+                                      className="flex items-center shrink-0"
+                                    >
                                       <button
                                         onClick={() => onEditRecord(r)}
                                         className="px-2.5 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
