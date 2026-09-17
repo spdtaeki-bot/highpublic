@@ -63,6 +63,36 @@ export function getCurrentBusinessDate(now: Date = new Date()): string {
   return format(now, "yyyy-MM-dd");
 }
 
+/**
+ * 화면의 회차 뱃지 → 실제 저장 데이터 위치.
+ * - synthesized=false : 기록의 collectionHistory(유효 항목만, getStoredHistory 기준) 의 entryIndex 번째 항목
+ * - synthesized=true  : 저장 이력이 없는 기록. 기록 필드(paymentMethod/collectedAt/...)로 합성된 이력의 entryIndex 번째 항목.
+ *                       entryIndex === -1 이면 그 기록의 합성 수금 전체를 가리킨다.
+ */
+export interface CollectionEntryRef {
+  recordId: string;
+  entryIndex: number;
+  synthesized: boolean;
+}
+
+/**
+ * 회차 뱃지를 구성하는 "논리적 수금 1건".
+ * - 업소 공용(isShared) 항목은 기록마다 복제 저장되어 있으므로 refs 가 기록 수만큼 있다 (편집/삭제 시 모두 함께 반영).
+ * - 개인(현장/개별) 항목은 refs 가 1개 (합성 이력이 여러 개인 과거 데이터만 예외).
+ */
+export interface CollectionRoundSource {
+  key: string;
+  isShared: boolean;
+  isOnSite: boolean;
+  staffName?: string;
+  amount: number;
+  paymentMethod?: PaymentMethod;
+  depositorName?: string;
+  collectedAt: any;
+  note?: string;
+  refs: CollectionEntryRef[];
+}
+
 export interface RoundBreakdownItem {
   round: number;
   label: string;
@@ -73,6 +103,8 @@ export interface RoundBreakdownItem {
   staffName?: string;
   isOnSite?: boolean;
   isDispatchBox?: boolean;
+  /** 이 뱃지에 묶인 실제 수금 건들 (같은 분·수단·입금자인 개인 수금은 한 뱃지로 묶여 표시된다) */
+  sources: CollectionRoundSource[];
 }
 
 export interface EstablishmentCollectionResult {
@@ -514,6 +546,246 @@ export function buildEstablishmentAdditionalCollectUpdates(
   return { updates };
 }
 
+/** 수금 1건 편집 내용. 지정한 필드만 바뀐다. depositorName: null → 입금자 지움 */
+export interface CollectionEntryPatch {
+  amount?: number;
+  paymentMethod?: PaymentMethod;
+  depositorName?: string | null;
+  /** Firestore Timestamp */
+  collectedAt?: any;
+}
+
+export interface CollectionEntryOperation {
+  source: CollectionRoundSource;
+  /** null = 삭제 */
+  patch: CollectionEntryPatch | null;
+}
+
+export interface CollectionEntryUpdateResult {
+  updates: Array<{ id: string; updates: Partial<DispatchRecord> }>;
+  error?: string;
+}
+
+/**
+ * 회차 뱃지 단위의 개별 수금 편집/삭제가 각 기록에 어떤 변경을 가해야 하는지 계산한다.
+ *
+ * 원칙:
+ * 1. 사용자가 지정한 수금 건만 바꾼다. 다른 항목은 순서·내용 그대로 유지한다.
+ * 2. 업소 공용 항목은 그 항목이 복제 저장된 모든 기록에서 동일하게 바꾼다 (한쪽만 바뀌어 원장이 어긋나는 일 방지).
+ * 3. 저장 이력이 없던 기록(현장 수금 등 기록 필드로만 표현된 수금)은 편집 시 이력을 명시적으로 저장한다.
+ * 4. 변경 후 남는 수금이 없으면 그 기록은 미수(UNPAID)로 되돌린다 ('전체 취소'와 같은 상태).
+ * 5. 과거 데이터의 추정 플래그(isShared/isOnSite)는 건드리는 업소 기록 전체에 명시 저장한다.
+ *    (일부 기록만 플래그가 붙으면 개인/공용 판정이 어긋나 합계가 달라질 수 있기 때문)
+ */
+export function buildCollectionEntryUpdates(
+  records: DispatchRecord[],
+  ops: CollectionEntryOperation[],
+): CollectionEntryUpdateResult {
+  if (!records || records.length === 0 || ops.length === 0) return { updates: [] };
+
+  for (const op of ops) {
+    if (op.patch) {
+      if (op.patch.amount !== undefined) {
+        if (isNaN(op.patch.amount) || op.patch.amount <= 0) {
+          return { updates: [], error: "수금 금액은 0보다 커야 합니다. 없애려면 삭제를 사용해 주세요." };
+        }
+      }
+      if (op.source.refs.length > 1 && !op.source.isShared) {
+        return {
+          updates: [],
+          error: "이 수금 건은 과거 데이터로 여러 항목이 합쳐져 있어 금액 편집이 불가합니다. 삭제 후 다시 입력해 주세요.",
+        };
+      }
+    }
+  }
+
+  const classified = classifyEstablishmentHistories(records);
+
+  // 기록별로 "편집 기준 이력"을 만든다 (플래그 명시 포함)
+  type Work = {
+    r: DispatchRecord;
+    base: CollectionHistoryEntry[];
+    synthesized: boolean;
+    /** 플래그 명시 저장만 필요한 기록 (내용 변화 없음) */
+    touched: boolean;
+    /** 사용자가 실제로 편집/삭제한 항목이 있는 기록 */
+    edited: boolean;
+    deleted: Set<number>;
+  };
+  const works = new Map<string, Work>();
+  classified.forEach((c) => {
+    const r = c.r;
+    if (!r.id) return;
+    let base: CollectionHistoryEntry[];
+    let synthesized = false;
+    if (c.stored.length > 0) {
+      base = c.stored.map((e) => {
+        const idx = c.stored.indexOf(e);
+        if (c.shared.includes(e)) return { ...e, isShared: true, isOnSite: false };
+        return {
+          ...e,
+          isShared: false,
+          isOnSite: e.isOnSite !== undefined ? e.isOnSite : isOnSiteHistoryEntry(e, idx, r),
+        };
+      });
+    } else {
+      synthesized = true;
+      base = getRecordCollectionHistory(r).map((e, idx) => ({
+        ...e,
+        isShared: false,
+        isOnSite: isOnSiteHistoryEntry(e, idx, r),
+      }));
+    }
+    works.set(r.id, { r, base, synthesized, touched: false, edited: false, deleted: new Set() });
+  });
+
+  // 과거 데이터: 플래그가 없는 항목이 있는 기록은 (내용 변화 없이) 플래그만 명시 저장 대상에 포함
+  classified.forEach((c) => {
+    const w = c.r.id ? works.get(c.r.id) : undefined;
+    if (!w || w.synthesized) return;
+    if (c.stored.some((e) => e.isShared === undefined)) w.touched = true;
+  });
+
+  const applyPatch = (e: CollectionHistoryEntry, p: CollectionEntryPatch): CollectionHistoryEntry => {
+    const next: CollectionHistoryEntry = { ...e };
+    if (p.amount !== undefined) next.amount = p.amount;
+    if (p.paymentMethod !== undefined) next.paymentMethod = p.paymentMethod;
+    if (p.collectedAt !== undefined) next.collectedAt = p.collectedAt;
+    if (p.depositorName !== undefined) {
+      if (p.depositorName) next.depositorName = p.depositorName;
+      else delete next.depositorName;
+    }
+    return next;
+  };
+
+  for (const op of ops) {
+    for (const ref of op.source.refs) {
+      const w = works.get(ref.recordId);
+      if (!w) {
+        return { updates: [], error: "대상 기록을 찾을 수 없습니다. 화면을 새로고침한 뒤 다시 시도해 주세요." };
+      }
+      if (ref.synthesized !== w.synthesized) {
+        return { updates: [], error: "기록이 변경되어 편집 위치가 맞지 않습니다. 화면을 새로고침한 뒤 다시 시도해 주세요." };
+      }
+      w.touched = true;
+      w.edited = true;
+
+      if (ref.synthesized && ref.entryIndex === -1) {
+        // 기록 필드로만 표현된 수금 전체
+        if (op.patch === null) {
+          w.base.forEach((_, i) => w.deleted.add(i));
+          w.deleted.add(-1);
+        } else {
+          if (w.base.length === 0) {
+            const r = w.r;
+            w.base = [
+              {
+                collectedAt: r.collectedAt || null,
+                amount: op.source.amount,
+                paymentMethod:
+                  r.paymentMethod && r.paymentMethod !== "UNPAID" ? r.paymentMethod : undefined,
+                ...(r.depositorName ? { depositorName: r.depositorName } : {}),
+                note: "1차 수금",
+                isOnSite: isDirectBoxRecord(r),
+                isShared: false,
+              },
+            ];
+          }
+          if (w.base.length !== 1) {
+            return {
+              updates: [],
+              error: "이 기록의 수금은 여러 항목이 합쳐져 있어 금액 편집이 불가합니다. 삭제 후 다시 입력해 주세요.",
+            };
+          }
+          w.base[0] = applyPatch(w.base[0], op.patch);
+        }
+        continue;
+      }
+
+      const target = w.base[ref.entryIndex];
+      if (!target) {
+        return { updates: [], error: "기록이 변경되어 편집 위치가 맞지 않습니다. 화면을 새로고침한 뒤 다시 시도해 주세요." };
+      }
+      if (op.patch === null) {
+        w.deleted.add(ref.entryIndex);
+      } else {
+        w.base[ref.entryIndex] = applyPatch(target, op.patch);
+      }
+    }
+  }
+
+  const updates: Array<{ id: string; updates: Partial<DispatchRecord> }> = [];
+  works.forEach((w) => {
+    if (!w.touched) return;
+    const r = w.r;
+    const history = w.base.filter((_, i) => !w.deleted.has(i));
+    const isRevertAll = w.deleted.has(-1);
+
+    if (history.length === 0 || isRevertAll) {
+      // 남는 수금 없음 → 미수로 되돌림 ('전체 취소'와 동일한 상태)
+      updates.push({
+        id: r.id as string,
+        updates: {
+          paymentMethod: "UNPAID",
+          collectedAt: null,
+          additionalCollectedAt: null,
+          collectionHistory: [],
+          isPass: false,
+          collectedAmount: 0,
+          depositorName: null,
+          isDispatchBoxCollection: false,
+          wasUnpaid: true,
+        } as any,
+      });
+      return;
+    }
+
+    const own = history.filter((e) => e.isShared !== true);
+    const shared = history.filter((e) => e.isShared === true);
+    const u: Record<string, any> = { collectionHistory: history };
+
+    if (!w.edited) {
+      // 플래그 명시 저장만: 내용은 그대로, 수단/시각/입금자 등 기록 필드는 건드리지 않는다.
+      if (own.some((e) => e.isOnSite === true) && r.isDispatchBoxCollection !== true) {
+        u.isDispatchBoxCollection = true;
+      }
+      updates.push({ id: r.id as string, updates: u as Partial<DispatchRecord> });
+      return;
+    }
+
+    if (own.length > 0) {
+      // 개인 수금이 있는 기록: 첫 개인 항목이 이 기록의 수금 수단/시각/입금자다.
+      const first = own[0];
+      u.paymentMethod =
+        first.paymentMethod ||
+        (r.paymentMethod && r.paymentMethod !== "UNPAID" ? r.paymentMethod : "CASH");
+      u.collectedAt = first.collectedAt || r.collectedAt || null;
+      u.depositorName = first.depositorName || null;
+      u.isDispatchBoxCollection = first.isOnSite === true;
+      u.additionalCollectedAt =
+        history.length > 1 ? history[history.length - 1].collectedAt || null : null;
+      if (shared.length === 0) {
+        u.collectedAmount = own.reduce((s, e) => s + (e.amount || 0), 0);
+      }
+    } else {
+      // 업소 공용 수금만 있는 기록
+      const first = shared[0];
+      u.paymentMethod =
+        first.paymentMethod ||
+        (r.paymentMethod && r.paymentMethod !== "UNPAID" ? r.paymentMethod : "CASH");
+      u.collectedAt = first.collectedAt || r.collectedAt || null;
+      u.depositorName = first.depositorName || null;
+      u.isDispatchBoxCollection = false;
+      u.additionalCollectedAt =
+        shared.length > 1 ? shared[shared.length - 1].collectedAt || null : null;
+    }
+
+    updates.push({ id: r.id as string, updates: u as Partial<DispatchRecord> });
+  });
+
+  return { updates };
+}
+
 export function calculateEstablishmentCollection(
   records: DispatchRecord[],
 ): EstablishmentCollectionResult {
@@ -630,10 +902,26 @@ export function calculateEstablishmentCollection(
     /** 공용 원장 항목: 다른 이벤트와 묶지 않고, 회차는 메모(N차)에서 가져온다 */
     isShared?: boolean;
     fixedRound?: number;
+    sources: CollectionRoundSource[];
   }
 
   const events: CollectionEventItem[] = [];
   let totalCollected = 0;
+
+  const makeSource = (
+    key: string,
+    base: {
+      isShared: boolean;
+      isOnSite: boolean;
+      staffName?: string;
+      amount: number;
+      paymentMethod?: PaymentMethod;
+      depositorName?: string;
+      collectedAt: any;
+      note?: string;
+    },
+    refs: CollectionEntryRef[],
+  ): CollectionRoundSource => ({ key, ...base, refs });
 
   if (isEstablishmentBatchHistory) {
     // (a) 공용 원장: 한 번만
@@ -644,6 +932,15 @@ export function calculateEstablishmentCollection(
       let roundNum = idx + 1;
       const m = entry.note ? entry.note.match(/(\d+)차/) : null;
       if (m) roundNum = parseInt(m[1], 10);
+      // 이 공용 항목이 저장된 모든 기록의 위치 (편집/삭제 시 함께 반영)
+      const refs: CollectionEntryRef[] = withShared
+        .filter((c) => !!c.r.id)
+        .map((c) => ({
+          recordId: c.r.id as string,
+          entryIndex: c.stored.indexOf(c.shared[idx]),
+          synthesized: false,
+        }))
+        .filter((ref) => ref.entryIndex >= 0);
       events.push({
         amount: amt,
         timestamp: getTimestampHelper(entry.collectedAt),
@@ -654,6 +951,21 @@ export function calculateEstablishmentCollection(
         isOnSite: false,
         isShared: true,
         fixedRound: roundNum,
+        sources: [
+          makeSource(
+            `shared-${idx}`,
+            {
+              isShared: true,
+              isOnSite: false,
+              amount: amt,
+              paymentMethod: entry.paymentMethod,
+              depositorName: entry.depositorName,
+              collectedAt: entry.collectedAt,
+              note: entry.note,
+            },
+            refs,
+          ),
+        ],
       });
     });
 
@@ -665,6 +977,8 @@ export function calculateEstablishmentCollection(
           const amt = entry.amount || 0;
           totalCollected += amt;
           if (amt <= 0) return;
+          const entryIndex = stored.indexOf(entry);
+          const onSite = isOnSiteHistoryEntry(entry, entryIndex, r);
           events.push({
             amount: amt,
             timestamp: getTimestampHelper(entry.collectedAt),
@@ -673,8 +987,26 @@ export function calculateEstablishmentCollection(
             depositorName: entry.depositorName,
             label: entry.note,
             staffName: r.staffName,
-            isOnSite: isOnSiteHistoryEntry(entry, stored.indexOf(entry), r),
+            isOnSite: onSite,
             isDispatchBox: isRecordDirectBox,
+            sources: r.id
+              ? [
+                  makeSource(
+                    `${r.id}-${entryIndex}`,
+                    {
+                      isShared: false,
+                      isOnSite: onSite,
+                      staffName: r.staffName,
+                      amount: amt,
+                      paymentMethod: entry.paymentMethod,
+                      depositorName: entry.depositorName,
+                      collectedAt: entry.collectedAt,
+                      note: entry.note,
+                    },
+                    [{ recordId: r.id, entryIndex, synthesized: false }],
+                  ),
+                ]
+              : [],
           });
         });
       } else {
@@ -692,6 +1024,23 @@ export function calculateEstablishmentCollection(
             staffName: r.staffName,
             isOnSite: isRecordDirectBox,
             isDispatchBox: isRecordDirectBox,
+            sources: r.id
+              ? [
+                  makeSource(
+                    `${r.id}-synth`,
+                    {
+                      isShared: false,
+                      isOnSite: isRecordDirectBox,
+                      staffName: r.staffName,
+                      amount: paid,
+                      paymentMethod: r.paymentMethod,
+                      depositorName: r.depositorName,
+                      collectedAt: r.collectedAt,
+                    },
+                    [{ recordId: r.id, entryIndex: -1, synthesized: true }],
+                  ),
+                ]
+              : [],
           });
         }
       }
@@ -703,10 +1052,12 @@ export function calculateEstablishmentCollection(
     records.forEach((r) => {
       const hist = getRecordCollectionHistory(r);
       const isRecordDirectBox = isDirectBoxRecord(r);
+      const hasStored = getStoredHistory(r).length > 0;
 
       if (hist.length > 0) {
         hist.forEach((entry, idx) => {
           if ((entry.amount || 0) > 0) {
+            const onSite = isOnSiteHistoryEntry(entry, idx, r);
             events.push({
               amount: entry.amount || 0,
               timestamp: getTimestampHelper(entry.collectedAt),
@@ -715,8 +1066,26 @@ export function calculateEstablishmentCollection(
               depositorName: entry.depositorName,
               label: entry.note,
               staffName: r.staffName,
-              isOnSite: isOnSiteHistoryEntry(entry, idx, r),
+              isOnSite: onSite,
               isDispatchBox: isRecordDirectBox,
+              sources: r.id
+                ? [
+                    makeSource(
+                      `${r.id}-${hasStored ? idx : `synth${idx}`}`,
+                      {
+                        isShared: false,
+                        isOnSite: onSite,
+                        staffName: r.staffName,
+                        amount: entry.amount || 0,
+                        paymentMethod: entry.paymentMethod,
+                        depositorName: entry.depositorName,
+                        collectedAt: entry.collectedAt,
+                        note: entry.note,
+                      },
+                      [{ recordId: r.id, entryIndex: idx, synthesized: !hasStored }],
+                    ),
+                  ]
+                : [],
             });
           }
         });
@@ -734,6 +1103,23 @@ export function calculateEstablishmentCollection(
             staffName: r.staffName,
             isOnSite: isRecordDirectBox,
             isDispatchBox: isRecordDirectBox,
+            sources: r.id
+              ? [
+                  makeSource(
+                    `${r.id}-synth`,
+                    {
+                      isShared: false,
+                      isOnSite: isRecordDirectBox,
+                      staffName: r.staffName,
+                      amount: paid,
+                      paymentMethod: r.paymentMethod,
+                      depositorName: r.depositorName,
+                      collectedAt: r.collectedAt,
+                    },
+                    [{ recordId: r.id, entryIndex: -1, synthesized: true }],
+                  ),
+                ]
+              : [],
           });
         }
       }
@@ -765,8 +1151,9 @@ export function calculateEstablishmentCollection(
           ? `${existing.staffName}, ${ev.staffName}`
           : ev.staffName;
       }
+      existing.sources = [...existing.sources, ...ev.sources];
     } else {
-      groupedEvents.push({ ...ev });
+      groupedEvents.push({ ...ev, sources: [...ev.sources] });
     }
   });
 
@@ -784,6 +1171,7 @@ export function calculateEstablishmentCollection(
         staffName: ev.staffName,
         isOnSite: true,
         isDispatchBox: ev.isDispatchBox,
+        sources: ev.sources,
       };
     }
     if (ev.isShared && ev.fixedRound !== undefined) {
@@ -796,6 +1184,7 @@ export function calculateEstablishmentCollection(
         paymentMethod: ev.paymentMethod,
         depositorName: ev.depositorName,
         isOnSite: false,
+        sources: ev.sources,
       };
     }
     roundCounter++;
@@ -810,6 +1199,7 @@ export function calculateEstablishmentCollection(
       staffName: ev.staffName,
       isOnSite: false,
       isDispatchBox: ev.isDispatchBox,
+      sources: ev.sources,
     };
   });
 

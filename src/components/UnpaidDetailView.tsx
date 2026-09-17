@@ -32,6 +32,7 @@ import {
 } from "../lib/utils";
 import { BatchCollectForm } from "./BatchCollectForm";
 import { EstablishmentAdditionalCollectForm } from "./EstablishmentAdditionalCollectForm";
+import { CollectionRoundBadges } from "./CollectionRoundBadges";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -1482,51 +1483,22 @@ export function UnpaidDetailView({
                               </div>
 
                               {estRoundBreakdown.length > 0 && (
-                                <div className="flex items-center gap-1.5 flex-wrap shrink-0">
-                                  {estRoundBreakdown.map((rd, rdIdx) => (
-                                    <span
-                                      key={`${rd.label}-${rd.round}-${rdIdx}`}
-                                      className={cn(
-                                        "px-2.5 py-1 rounded-lg text-xs font-black border whitespace-nowrap shrink-0 shadow-2xs inline-flex items-center gap-1.5",
-                                        rd.isOnSite
-                                          ? "bg-teal-50 text-teal-950 border-teal-300"
-                                          : rd.round === 1
-                                            ? "bg-emerald-50 text-emerald-900 border-emerald-300"
-                                            : "bg-amber-50 text-amber-950 border-amber-300",
-                                      )}
-                                    >
-                                      <span
-                                        className={cn(
-                                          "px-1.5 py-0.5 rounded text-[10px] font-black",
-                                          rd.isOnSite
-                                            ? "bg-teal-200/90 text-teal-950"
-                                            : rd.round === 1
-                                              ? "bg-emerald-200/80 text-emerald-900"
-                                              : "bg-amber-200/80 text-amber-950",
-                                        )}
-                                      >
-                                        {rd.isOnSite ? "현장" : `${rd.round}차`}
-                                      </span>
-                                      {rd.dateStr && (
-                                        <span className="text-[11px] font-bold text-stone-600">
-                                          {rd.dateStr}
-                                        </span>
-                                      )}
-                                      <span className="font-black text-stone-900">
-                                        {rd.amount.toLocaleString()}원
-                                      </span>
-                                      {rd.paymentMethod && (
-                                        <span className="text-[10px] font-bold text-stone-500">
-                                          ({rd.paymentMethod === "TRANSFER" ? "계좌" : "현금"})
-                                        </span>
-                                      )}
-                                      {rd.depositorName && (
-                                        <span className="text-[10px] font-black text-blue-600">
-                                          [{rd.depositorName}]
-                                        </span>
-                                      )}
-                                    </span>
-                                  ))}
+                                <div className="basis-full w-full min-w-0">
+                                  <CollectionRoundBadges
+                                    rounds={estRoundBreakdown}
+                                    records={est.records}
+                                    onApply={async (updates) => {
+                                      await Promise.all(
+                                        updates.map(({ id, updates: u }) =>
+                                          applyRecordUpdate(id, u),
+                                        ),
+                                      );
+                                    }}
+                                    onConfirm={(message, action) =>
+                                      setConfirmConfig({ message, action })
+                                    }
+                                    onAlert={(message) => setAlertConfig({ message })}
+                                  />
                                 </div>
                               )}
                             </div>

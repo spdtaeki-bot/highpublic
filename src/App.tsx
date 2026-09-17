@@ -105,6 +105,7 @@ import {
 } from "./services/dispatchService";
 import { SettlementView } from "./components/SettlementView";
 import { UnpaidDetailView } from "./components/UnpaidDetailView";
+import { CollectionRoundBadges } from "./components/CollectionRoundBadges";
 import { ChoiceSetupModal } from "./components/ChoiceSetupModal";
 import { ChoiceActionModal } from "./components/ChoiceActionModal";
 import {
@@ -8070,51 +8071,24 @@ function DetailBreakdownModal({
                               </span>
                             </div>
                             {estRoundBreakdown.length > 0 && (
-                              <div className="flex items-center gap-1.5 flex-wrap shrink-0">
-                                {estRoundBreakdown.map((rd, rdIdx) => (
-                                  <span
-                                    key={`${rd.label}-${rd.round}-${rdIdx}`}
-                                    className={cn(
-                                      "px-2 py-0.5 rounded-lg text-[11px] font-black border whitespace-nowrap shrink-0 shadow-2xs inline-flex items-center gap-1",
-                                      rd.isOnSite
-                                        ? "bg-teal-50 text-teal-950 border-teal-300"
-                                        : rd.round === 1
-                                          ? "bg-emerald-50 text-emerald-900 border-emerald-300"
-                                          : "bg-amber-50 text-amber-950 border-amber-300"
-                                    )}
-                                  >
-                                    <span
-                                      className={cn(
-                                        "px-1 py-0.2 rounded text-[9px] font-black",
-                                        rd.isOnSite
-                                          ? "bg-teal-200/90 text-teal-950"
-                                          : rd.round === 1
-                                            ? "bg-emerald-200/80 text-emerald-900"
-                                            : "bg-amber-200/80 text-amber-950"
-                                      )}
-                                    >
-                                      {rd.isOnSite ? "현장" : `${rd.round}차`}
-                                    </span>
-                                    {rd.dateStr && (
-                                      <span className="text-[10px] font-bold text-stone-600">
-                                        {rd.dateStr}
-                                      </span>
-                                    )}
-                                    <span className="font-black text-stone-900">
-                                      {rd.amount.toLocaleString()}원
-                                    </span>
-                                    {rd.paymentMethod && (
-                                      <span className="text-[9px] font-bold text-stone-500">
-                                        ({rd.paymentMethod === "TRANSFER" ? "계좌" : "현금"})
-                                      </span>
-                                    )}
-                                    {rd.depositorName && (
-                                      <span className="text-[9px] font-black text-blue-600">
-                                        [{rd.depositorName}]
-                                      </span>
-                                    )}
-                                  </span>
-                                ))}
+                              <div className="basis-full w-full min-w-0">
+                                <CollectionRoundBadges
+                                  rounds={estRoundBreakdown}
+                                  records={estData.records}
+                                  size="sm"
+                                  onApply={async (updates) => {
+                                    await Promise.all(
+                                      updates.map(async ({ id, updates: u }) => {
+                                        await updateDispatch(id, u as any);
+                                        updateLocalRecord(id, u as any);
+                                      }),
+                                    );
+                                  }}
+                                  onConfirm={(message, action) =>
+                                    setConfirmConfig({ message, action })
+                                  }
+                                  onAlert={(message) => setAlertConfig({ message })}
+                                />
                               </div>
                             )}
                           </div>
