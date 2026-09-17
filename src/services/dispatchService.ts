@@ -12,7 +12,10 @@ import {
   getDoc,
   getDocFromServer,
   setDoc,
-  getDocs
+  getDocs,
+  arrayUnion,
+  arrayRemove,
+  deleteField
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { DispatchRecord, BouncedRecord, SYSTEM_RATES, COMMISSION_RATE, SystemType, StaffType, ActiveChoice } from '../types';
@@ -275,46 +278,88 @@ export const subscribeToStaff = (callback: (staff: any[]) => void, onError?: (er
 };
 
 // Attendance Management
-export const updateAttendance = async (date: string, staffIds: string[], offStaffIds: string[] = [], offTimes: Record<string, any> = {}, customCheckInTimes?: Record<string, any>, manualDailyProfits?: Record<string, number>, activeChoices?: Record<string, ActiveChoice>) => {
+/**
+ * 출근부는 여러 화면/기기가 동시에 수정하므로 문서 전체를 덮어쓰지 않는다.
+ * 명단에서 빼는 동작은 반드시 `intent`로 명시해야 하며, 그 외에는 어떤 인원도 사라지지 않는다.
+ */
+export const updateAttendance = async (
+  date: string,
+  staffIds: string[],
+  offStaffIds: string[] = [],
+  offTimes: Record<string, any> = {},
+  customCheckInTimes?: Record<string, any>,
+  manualDailyProfits?: Record<string, number>,
+  activeChoices?: Record<string, ActiveChoice>,
+  intent: { removeStaffIds?: string[]; removeOffStaffIds?: string[] } = {}
+) => {
   const id = `${FIXED_UID}_${date}`;
   try {
     const docRef = doc(db, ATTENDANCE_COLLECTION, id);
-    const existingDoc = await getDoc(docRef);
-    let checkInTimes: Record<string, any> = {};
-    let existingManualDailyProfits: Record<string, number> = {};
-    let existingActiveChoices: Record<string, ActiveChoice> = {};
+    const removeStaffIds = intent.removeStaffIds || [];
+    const removeOffStaffIds = Array.from(
+      new Set([...(intent.removeOffStaffIds || []), ...removeStaffIds])
+    );
 
-    if (existingDoc.exists()) {
-      checkInTimes = existingDoc.data().checkInTimes || {};
-      existingManualDailyProfits = existingDoc.data().manualDailyProfits || {};
-      existingActiveChoices = existingDoc.data().activeChoices || {};
+    let existingCheckInTimes: Record<string, any> = {};
+    try {
+      const existingDoc = await getDoc(docRef);
+      if (existingDoc.exists()) {
+        existingCheckInTimes = existingDoc.data().checkInTimes || {};
+      }
+    } catch {
+      // 조회에 실패해도 기존 값을 지우지 않고 그대로 둔다.
     }
 
-    // Use custom checkInTimes if provided, otherwise merge existing/new
-    const newCheckInTimes: Record<string, any> = {};
-    staffIds.forEach(staffId => {
-      if (customCheckInTimes && customCheckInTimes[staffId]) {
-        newCheckInTimes[staffId] = customCheckInTimes[staffId];
-      } else if (checkInTimes[staffId]) {
-        newCheckInTimes[staffId] = checkInTimes[staffId];
-      } else {
-        newCheckInTimes[staffId] = Timestamp.now();
+    if (removeStaffIds.length > 0 || removeOffStaffIds.length > 0) {
+      const removal: Record<string, any> = { date, uid: FIXED_UID };
+      const clearedCheckIns: Record<string, any> = {};
+      const clearedOffTimes: Record<string, any> = {};
+
+      if (removeStaffIds.length > 0) {
+        removal.staffIds = arrayRemove(...removeStaffIds);
+        removeStaffIds.forEach(sid => { clearedCheckIns[sid] = deleteField(); });
+      }
+      if (removeOffStaffIds.length > 0) {
+        removal.offStaffIds = arrayRemove(...removeOffStaffIds);
+        removeOffStaffIds.forEach(sid => { clearedOffTimes[sid] = deleteField(); });
+      }
+      if (Object.keys(clearedCheckIns).length > 0) removal.checkInTimes = clearedCheckIns;
+      if (Object.keys(clearedOffTimes).length > 0) removal.offTimes = clearedOffTimes;
+
+      await setDoc(docRef, removal, { merge: true });
+    }
+
+    const keptStaffIds = staffIds.filter(sid => !removeStaffIds.includes(sid));
+    const keptOffStaffIds = offStaffIds.filter(
+      sid => !removeOffStaffIds.includes(sid) && !removeStaffIds.includes(sid)
+    );
+
+    const payload: Record<string, any> = { date, uid: FIXED_UID };
+    if (keptStaffIds.length > 0) payload.staffIds = arrayUnion(...keptStaffIds);
+    if (keptOffStaffIds.length > 0) payload.offStaffIds = arrayUnion(...keptOffStaffIds);
+
+    // 출근 시각은 새로 등록된 인원에게만 부여하고, 이미 기록된 시각은 건드리지 않는다.
+    const nextCheckInTimes: Record<string, any> = {};
+    keptStaffIds.forEach(sid => {
+      const custom = customCheckInTimes ? customCheckInTimes[sid] : undefined;
+      if (custom) {
+        nextCheckInTimes[sid] = custom;
+      } else if (!existingCheckInTimes[sid]) {
+        nextCheckInTimes[sid] = Timestamp.now();
       }
     });
+    if (Object.keys(nextCheckInTimes).length > 0) payload.checkInTimes = nextCheckInTimes;
 
-    const finalManualDailyProfits = manualDailyProfits || existingManualDailyProfits;
-    const finalActiveChoices = activeChoices !== undefined ? activeChoices : existingActiveChoices;
-
-    await setDoc(docRef, {
-      date,
-      staffIds,
-      checkInTimes: newCheckInTimes,
-      offStaffIds,
-      offTimes,
-      manualDailyProfits: finalManualDailyProfits,
-      activeChoices: sanitizeForFirestore(finalActiveChoices),
-      uid: FIXED_UID
+    const nextOffTimes: Record<string, any> = {};
+    keptOffStaffIds.forEach(sid => {
+      if (offTimes[sid]) nextOffTimes[sid] = offTimes[sid];
     });
+    if (Object.keys(nextOffTimes).length > 0) payload.offTimes = nextOffTimes;
+
+    if (manualDailyProfits) payload.manualDailyProfits = manualDailyProfits;
+    if (activeChoices !== undefined) payload.activeChoices = sanitizeForFirestore(activeChoices);
+
+    await setDoc(docRef, payload, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, ATTENDANCE_COLLECTION);
   }
@@ -335,14 +380,9 @@ export const updateActiveChoices = async (
     } else {
       await setDoc(docRef, {
         date,
-        staffIds: [],
-        offStaffIds: [],
-        checkInTimes: {},
-        offTimes: {},
-        manualDailyProfits: {},
         activeChoices: sanitizeForFirestore(activeChoices),
         uid: FIXED_UID,
-      });
+      }, { merge: true });
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `${ATTENDANCE_COLLECTION}/${id}`);
@@ -377,14 +417,9 @@ export const setActiveChoicesMultiple = async (
     } else {
       await setDoc(docRef, {
         date,
-        staffIds: [],
-        offStaffIds: [],
-        checkInTimes: {},
-        offTimes: {},
-        manualDailyProfits: {},
         activeChoices: sanitizeForFirestore(activeChoices),
         uid: FIXED_UID,
-      });
+      }, { merge: true });
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `${ATTENDANCE_COLLECTION}/${id}`);
@@ -436,14 +471,9 @@ export const updateManualDailyProfit = async (staffName: string, date: string, a
     } else {
       await setDoc(docRef, {
         date,
-        staffIds: [],
-        offStaffIds: [],
-        checkInTimes: {},
-        offTimes: {},
         manualDailyProfits,
-        activeChoices: {},
         uid: FIXED_UID
-      });
+      }, { merge: true });
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `${ATTENDANCE_COLLECTION}/${id}`);
@@ -477,14 +507,9 @@ export const updateManualDailyProfitsMultiple = async (
     } else {
       await setDoc(docRef, {
         date,
-        staffIds: [],
-        offStaffIds: [],
-        checkInTimes: {},
-        offTimes: {},
         manualDailyProfits,
-        activeChoices: {},
         uid: FIXED_UID
-      });
+      }, { merge: true });
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `${ATTENDANCE_COLLECTION}/${id}`);

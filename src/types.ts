@@ -8,6 +8,18 @@ export interface CollectionHistoryEntry {
   paymentMethod?: PaymentMethod;
   depositorName?: string;
   note?: string; // e.g. "1차 수금", "2차 추가수금", "3차 추가수금"
+  /**
+   * true  = 이 기록(직원) 개인의 현장 수금. 업소 단위 일괄/추가수금에 의해 절대 변경되지 않는다.
+   * false = 업소 단위 공용 수금(일괄/추가수금).
+   * undefined = 과거 데이터. note/isDispatchBoxCollection 으로 추정한다.
+   */
+  isOnSite?: boolean;
+  /**
+   * true  = 업소 단위 공용 수금 원장 항목 (일괄 수금 / N차 추가수금). 같은 업소 기록들에 동일하게 복제 저장되며 합산 시 한 번만 센다.
+   * false = 이 기록(직원) 개인의 수금 (현장 수금 또는 개별 수금). 기록마다 각각 합산한다.
+   * undefined = 과거 데이터. 기록 간 이력 동일성 + 금액 대조로 추정한다.
+   */
+  isShared?: boolean;
 }
 
 export interface BouncedRecord {

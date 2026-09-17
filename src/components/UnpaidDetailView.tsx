@@ -27,6 +27,8 @@ import {
   calculateEstablishmentCollection,
   RoundBreakdownItem,
   getRecordBusinessDate,
+  buildEstablishmentAdditionalCollectUpdates,
+  isOnSiteHistoryEntry,
 } from "../lib/utils";
 import { BatchCollectForm } from "./BatchCollectForm";
 import { EstablishmentAdditionalCollectForm } from "./EstablishmentAdditionalCollectForm";
@@ -701,8 +703,12 @@ export function UnpaidDetailView({
         paymentMethod: method,
         ...(depositorName ? { depositorName } : {}),
         note: "1차 수금",
+        isOnSite: false,
+        // 업소 단위 공용 원장 항목 (대상 기록 전체에 동일 복제, 합산 시 한 번만)
+        isShared: true,
       };
 
+      // 미수(UNPAID) 기록만 대상. 이미 현장 수금된 기록은 절대 건드리지 않는다.
       const updatePromises = unpaidRecords.map(async (r) => {
         const updates = {
           paymentMethod: method,
@@ -766,92 +772,27 @@ export function UnpaidDetailView({
         new Date(year, month, day, hour, minute, 0, 0),
       );
 
-      // Find existing establishment collection history from any record
-      let existingHist: CollectionHistoryEntry[] = [];
-      for (const r of currentRecords) {
-        if (
-          r.collectionHistory &&
-          Array.isArray(r.collectionHistory) &&
-          r.collectionHistory.length > 0
-        ) {
-          existingHist = r.collectionHistory;
-          break;
-        }
-      }
-
-      let currentMaxRound = 1;
-      let hasAnyPreviousCollection =
-        currentRecords.some((r) => r.paymentMethod !== "UNPAID") ||
-        existingHist.length > 0;
-
-      existingHist.forEach((entry, idx) => {
-        let rNum = idx + 1;
-        if (entry.note) {
-          const match = entry.note.match(/(\d+)차/);
-          if (match) rNum = parseInt(match[1], 10);
-        }
-        if (rNum > currentMaxRound) currentMaxRound = rNum;
-      });
-
-      const nextRoundNum = hasAnyPreviousCollection ? currentMaxRound + 1 : 1;
-      const nextRoundLabel = `${nextRoundNum}차 추가수금`;
-
-      let updatedHistory: CollectionHistoryEntry[] = [];
-
-      if (additionalAmount > 0) {
-        const newEntry: CollectionHistoryEntry = {
+      // 업소 단위 추가수금/조정은 "업소 공용 원장"에만 반영한다.
+      // 각 직원 기록의 현장 수금(현금/계좌)은 그대로 보존되며, 기록별로 다른 원장이 섞여 있으면
+      // 임의로 덮어쓰지 않고 중단한다. (계산 로직은 App 의 상세 모달과 동일한 함수를 공유)
+      const { updates, error } = buildEstablishmentAdditionalCollectUpdates(
+        currentRecords,
+        {
+          method,
+          additionalAmount,
+          depositorName,
           collectedAt: customCollectedAt,
-          amount: additionalAmount,
-          paymentMethod: method,
-          ...(depositorName ? { depositorName } : {}),
-          note:
-            existingHist.length === 0 && nextRoundNum === 1
-              ? "1차 수금"
-              : nextRoundLabel,
-        };
-        updatedHistory = [...existingHist, newEntry];
-      } else if (additionalAmount < 0) {
-        let remainingToDeduct = Math.abs(additionalAmount);
-        const newHist: CollectionHistoryEntry[] = [];
-        const reversed = [...existingHist].reverse();
-        for (const entry of reversed) {
-          const eAmt = entry.amount || 0;
-          if (remainingToDeduct <= 0) {
-            newHist.unshift(entry);
-          } else if (eAmt <= remainingToDeduct) {
-            remainingToDeduct -= eAmt;
-          } else {
-            newHist.unshift({
-              ...entry,
-              amount: eAmt - remainingToDeduct,
-            });
-            remainingToDeduct = 0;
-          }
-        }
-        updatedHistory = newHist;
+        },
+      );
+
+      if (error) {
+        setAlertConfig({ message: `[${estName}] ${error}` });
+        return;
       }
 
-      const updatePromises = currentRecords.map(async (r) => {
-        const isPaid = updatedHistory.length > 0;
-        const updates: Partial<DispatchRecord> = {
-          paymentMethod: isPaid
-            ? r.paymentMethod !== "UNPAID"
-              ? r.paymentMethod
-              : method
-            : "UNPAID",
-          collectionHistory: updatedHistory,
-          collectedAt: isPaid ? r.collectedAt || customCollectedAt : null,
-          additionalCollectedAt: isPaid ? customCollectedAt : null,
-          depositorName: depositorName || r.depositorName || null,
-          collectedAmount: undefined,
-        };
-
-        if (r.id) {
-          await applyRecordUpdate(r.id, updates as any);
-        }
-      });
-
-      await Promise.all(updatePromises);
+      await Promise.all(
+        updates.map(({ id, updates: u }) => applyRecordUpdate(id, u)),
+      );
       setBatchAdditionalCollectingKey(null);
     } catch (e) {
       console.error("추가 수금 처리 중 오류:", e);
@@ -1788,12 +1729,10 @@ export function UnpaidDetailView({
                                         }
 
                                         const history = getRecordCollectionHistory(r);
-                                        const onSiteEntries = history.filter((entry, hIdx) => {
-                                          return (
-                                            hIdx === 0 &&
-                                            (!entry.note || entry.note.includes("현장") || !entry.note.includes("추가수금"))
-                                          );
-                                        });
+                                        // 명시적 isOnSite 플래그를 우선 신뢰하고, 없는 과거 데이터만 기존 규칙으로 추정
+                                        const onSiteEntries = history.filter((entry, hIdx) =>
+                                          isOnSiteHistoryEntry(entry, hIdx, r),
+                                        );
 
                                         if (onSiteEntries.length > 0) {
                                           return (

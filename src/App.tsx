@@ -107,7 +107,15 @@ import { SettlementView } from "./components/SettlementView";
 import { UnpaidDetailView } from "./components/UnpaidDetailView";
 import { ChoiceSetupModal } from "./components/ChoiceSetupModal";
 import { ChoiceActionModal } from "./components/ChoiceActionModal";
-import { calculateEstablishmentCollection, getRecordCollectionHistory, getRecordBusinessDate } from "./lib/utils";
+import {
+  calculateEstablishmentCollection,
+  getRecordCollectionHistory,
+  getRecordBusinessDate,
+  buildEstablishmentAdditionalCollectUpdates,
+  splitCollectionHistory,
+  isOnSiteHistoryEntry,
+  syncOnSiteEntriesPaymentMethod,
+} from "./lib/utils";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -797,8 +805,33 @@ export default function App() {
     }
   };
 
+  const isStaffClockedIn = (staffName: string) => {
+    const s = staff.find((st) => st.name === staffName);
+    return !!(s?.id && workingStaffIds.includes(s.id));
+  };
+
   const handleAddRecordForStaff = (staffNames: string[]) => {
-    setPreSelectedStaffNames(staffNames);
+    const uniqueNames = Array.from(new Set(staffNames.filter(Boolean)));
+    const clockedNames = uniqueNames.filter((name) => isStaffClockedIn(name));
+    const skipped = uniqueNames.filter((name) => !clockedNames.includes(name));
+
+    if (clockedNames.length === 0) {
+      setAlertConfig({
+        message:
+          skipped.length > 0
+            ? `${skipped.join(", ")}은(는) 출근 등록이 되어 있지 않아 근무기록을 추가할 수 없습니다. 먼저 출근 등록을 해주세요.`
+            : "출근한 직원을 선택한 뒤 근무기록을 추가해주세요.",
+      });
+      return;
+    }
+
+    if (skipped.length > 0) {
+      setAlertConfig({
+        message: `${skipped.join(", ")}은(는) 미출근 상태라 제외했습니다. 출근 등록 후 다시 추가해주세요.`,
+      });
+    }
+
+    setPreSelectedStaffNames(clockedNames);
     setIsFormOpen(true);
   };
 
@@ -1036,8 +1069,21 @@ export default function App() {
             ? addMinutes(baseDate, 24 * 60 + h * 60 + m)
             : addMinutes(baseDate, h * 60 + m);
 
+        const clockedStaffNames = staffNames.filter((name) =>
+          isStaffClockedIn(name),
+        );
+        const skippedStaffNames = staffNames.filter(
+          (name) => !isStaffClockedIn(name),
+        );
+        if (skippedStaffNames.length > 0) {
+          setAlertConfig({
+            message: `${skippedStaffNames.join(", ")}은(는) 출근 등록이 되어 있지 않아 진행 기록에서 제외했습니다.`,
+          });
+        }
+        if (clockedStaffNames.length === 0) return;
+
         const addPromises: Promise<any>[] = [];
-        for (const staffName of staffNames) {
+        for (const staffName of clockedStaffNames) {
           const s = staff.find((st) => st.name === staffName);
           const systemType: SystemType = s
             ? s.type === "COFFEE"
@@ -1953,6 +1999,10 @@ export default function App() {
         workingStaffIds,
         newOffIds,
         newOffTimes,
+        undefined,
+        undefined,
+        undefined,
+        isOff ? { removeOffStaffIds: [staffId] } : {},
       );
     } catch (error) {
       console.error("퇴근 처리 오류:", error);
@@ -1972,6 +2022,18 @@ export default function App() {
       e.stopPropagation();
     }
     const isWorking = workingStaffIds.includes(staffId);
+    if (isWorking) {
+      const staffMember = staff.find((s) => s.id === staffId);
+      const hasDispatchRecords = staffMember
+        ? records.some((r) => r.staffName === staffMember.name)
+        : false;
+      if (hasDispatchRecords) {
+        setAlertConfig({
+          message: `${staffMember?.name || "해당 직원"}은(는) 근무기록이 남아 있어 출근을 해제할 수 없습니다. 기록을 먼저 삭제해주세요.`,
+        });
+        return;
+      }
+    }
     const newIds = isWorking
       ? workingStaffIds.filter((id) => id !== staffId)
       : [...workingStaffIds, staffId];
@@ -1987,7 +2049,16 @@ export default function App() {
     }
 
     try {
-      await updateAttendance(selectedDate, newIds, newOffIds, newOffTimes);
+      await updateAttendance(
+        selectedDate,
+        newIds,
+        newOffIds,
+        newOffTimes,
+        undefined,
+        undefined,
+        undefined,
+        isWorking ? { removeStaffIds: [staffId] } : {},
+      );
     } catch (error) {
       console.error("출근 상태 변경 오류:", error);
       setAlertConfig({
@@ -3474,10 +3545,9 @@ export default function App() {
                 onProgressMultiple={handleProgressMultiple}
                 onFinishMultiple={handleFinishMultiple}
                 onAddRecord={(names) => {
-                  setPreSelectedStaffNames(
+                  handleAddRecordForStaff(
                     Array.isArray(names) ? names : [names],
                   );
-                  setIsFormOpen(true);
                 }}
                 onEditRecord={(record) => {
                   setEditingRecord(record);
@@ -5762,11 +5832,11 @@ function ListView({
                 <div className="flex items-center justify-between mb-1">
                   <div
                     onClick={() => {
-                      if (!isOff) onAddRecordForStaff([name]);
+                      if (!isOff && isWorking) onAddRecordForStaff([name]);
                     }}
                     className={cn(
                       "font-bold text-stone-900 transition-colors text-left flex flex-col min-w-0 flex-1",
-                      isOff
+                      isOff || !isWorking
                         ? "cursor-not-allowed opacity-50"
                         : "hover:text-stone-500 cursor-pointer",
                     )}
@@ -6534,11 +6604,18 @@ function ListView({
 
                 {/* Add Record Plus Button */}
                 <button
-                  disabled={isOff}
+                  disabled={isOff || !isWorking}
                   onClick={() => onAddRecordForStaff([name])}
+                  title={
+                    !isWorking
+                      ? "출근 등록 후에만 근무기록을 추가할 수 있습니다"
+                      : isOff
+                        ? "퇴근한 직원에게는 근무기록을 추가할 수 없습니다"
+                        : "근무기록 추가"
+                  }
                   className={cn(
                     "w-full py-4 rounded-xl border-2 border-dashed flex items-center justify-center transition-all active:scale-95 group",
-                    isOff
+                    isOff || !isWorking
                       ? "bg-stone-900 border-stone-900 text-stone-500 cursor-not-allowed"
                       : "border-stone-200 text-stone-300 hover:border-stone-400 hover:text-stone-400 hover:bg-stone-50",
                   )}
@@ -6546,7 +6623,7 @@ function ListView({
                   <Plus
                     className={cn(
                       "w-6 h-6 transition-transform",
-                      !isOff && "group-hover:scale-110",
+                      !isOff && isWorking && "group-hover:scale-110",
                     )}
                   />
                 </button>
@@ -6987,6 +7064,9 @@ function DetailBreakdownModal({
               paymentMethod: method,
               ...(depositorName ? { depositorName } : {}),
               note: "1차 수금",
+              // 이 기록 개인의 수금 (업소 공용 원장 아님)
+              isShared: false,
+              isOnSite: false,
             },
           ],
           isPass: isPass,
@@ -6995,23 +7075,39 @@ function DetailBreakdownModal({
           collectedAmount: finalCollectedAmount,
         };
       } else {
-        const nextN = existingHistory.length + 1;
+        // 이미 수금 이력이 있는 기록에 추가 입금을 붙이는 경우.
+        // 기존 현장 수금(현금/계좌) 항목은 isOnSite:true 로 고정해 보존하고, 새 항목만 뒤에 추가한다.
+        const { onSite, shared } = splitCollectionHistory(currentRec);
+        const preservedHistory = [...onSite, ...shared];
+        const nextN = preservedHistory.length + 1;
         const newEntry: CollectionHistoryEntry = {
           collectedAt: newTimestamp,
           amount: finalCollectedAmount,
           paymentMethod: method,
           ...(depositorName ? { depositorName } : {}),
           note: `${nextN}차 수금`,
+          isOnSite: false,
+          // 이 기록 개인의 수금 (업소 공용 원장 아님)
+          isShared: false,
         };
+        const newHistory = [...preservedHistory, newEntry];
+        const hasOnSite = onSite.length > 0;
         updates = {
-          paymentMethod: method,
+          // 현장 수금이 있는 기록: 최초 수금 수단/입금자/현장 플래그는 그 직원의 사실이므로 유지.
+          // 없는 기록만 기존 동작대로 새 입금 정보로 갱신.
+          ...(hasOnSite
+            ? {}
+            : {
+                paymentMethod: method,
+                isDispatchBoxCollection: false,
+                depositorName: depositorName || null,
+              }),
           collectedAt: currentRec.collectedAt || newTimestamp,
           additionalCollectedAt: newTimestamp,
-          collectionHistory: [...existingHistory, newEntry],
+          collectionHistory: newHistory,
           isPass: isPass,
-          isDispatchBoxCollection: false,
-          depositorName: depositorName || null,
-          collectedAmount: finalCollectedAmount,
+          // 이 기록의 누적 수금액 (감액/부족 판정에 사용되므로 마지막 입금액이 아닌 합계여야 함)
+          collectedAmount: newHistory.reduce((s, e) => s + (e.amount || 0), 0),
         };
       }
       await updateDispatch(id, updates as any);
@@ -7087,98 +7183,30 @@ function DetailBreakdownModal({
         new Date(year, month, day, hour, minute, 0, 0),
       );
 
-      // Determine existing highest round across all records for this establishment
-      let currentMaxRound = 1;
-      let hasAnyPreviousCollection = false;
-      currentRecords.forEach((r) => {
-        if (r.paymentMethod !== "UNPAID") {
-          hasAnyPreviousCollection = true;
-        }
-        const hist = getRecordCollectionHistory(r);
-        hist.forEach((entry, idx) => {
-          hasAnyPreviousCollection = true;
-          let rNum = idx + 1;
-          if (entry.note) {
-            const match = entry.note.match(/(\d+)차/);
-            if (match) rNum = parseInt(match[1], 10);
-          }
-          if (rNum > currentMaxRound) currentMaxRound = rNum;
-        });
-      });
-
-      const nextRoundNum = hasAnyPreviousCollection ? currentMaxRound + 1 : 1;
-      const nextRoundLabel = `${nextRoundNum}차 추가수금`;
-
-      // Find existing establishment collection history from any record
-      let existingHist: CollectionHistoryEntry[] = [];
-      for (const r of currentRecords) {
-        if (
-          r.collectionHistory &&
-          Array.isArray(r.collectionHistory) &&
-          r.collectionHistory.length > 0
-        ) {
-          existingHist = r.collectionHistory;
-          break;
-        }
-      }
-
-      let updatedHistory: CollectionHistoryEntry[] = [];
-
-      if (additionalAmount > 0) {
-        const newEntry: CollectionHistoryEntry = {
+      // 업소 단위 추가수금/조정은 "업소 공용 원장"에만 반영한다.
+      // 각 직원 기록의 현장 수금(현금/계좌)은 그대로 보존되며, 기록별로 다른 원장이 섞여 있으면
+      // 임의로 덮어쓰지 않고 중단한다. (미수 상세 화면과 동일한 함수를 공유)
+      const { updates, error } = buildEstablishmentAdditionalCollectUpdates(
+        currentRecords,
+        {
+          method,
+          additionalAmount,
+          depositorName,
           collectedAt: customCollectedAt,
-          amount: additionalAmount,
-          paymentMethod: method,
-          ...(depositorName ? { depositorName } : {}),
-          note:
-            existingHist.length === 0 && nextRoundNum === 1
-              ? "1차 수금"
-              : nextRoundLabel,
-        };
-        updatedHistory = [...existingHist, newEntry];
-      } else if (additionalAmount < 0) {
-        let remainingToDeduct = Math.abs(additionalAmount);
-        const newHist: CollectionHistoryEntry[] = [];
-        const reversed = [...existingHist].reverse();
-        for (const entry of reversed) {
-          const eAmt = entry.amount || 0;
-          if (remainingToDeduct <= 0) {
-            newHist.unshift(entry);
-          } else if (eAmt <= remainingToDeduct) {
-            remainingToDeduct -= eAmt;
-          } else {
-            newHist.unshift({
-              ...entry,
-              amount: eAmt - remainingToDeduct,
-            });
-            remainingToDeduct = 0;
-          }
-        }
-        updatedHistory = newHist;
+        },
+      );
+
+      if (error) {
+        setAlertConfig({ message: error });
+        return;
       }
 
-      const updatePromises = currentRecords.map(async (r) => {
-        const isPaid = updatedHistory.length > 0;
-        const updates: Partial<DispatchRecord> = {
-          paymentMethod: isPaid
-            ? r.paymentMethod !== "UNPAID"
-              ? r.paymentMethod
-              : method
-            : "UNPAID",
-          collectionHistory: updatedHistory,
-          collectedAt: isPaid ? r.collectedAt || customCollectedAt : null,
-          additionalCollectedAt: isPaid ? customCollectedAt : null,
-          depositorName: depositorName || r.depositorName || null,
-          collectedAmount: undefined,
-        };
-
-        if (r.id) {
-          await updateDispatch(r.id, updates as any);
-          updateLocalRecord(r.id, updates as any);
-        }
-      });
-
-      await Promise.all(updatePromises);
+      await Promise.all(
+        updates.map(async ({ id, updates: u }) => {
+          await updateDispatch(id, u as any);
+          updateLocalRecord(id, u as any);
+        }),
+      );
       setBatchAdditionalCollectingKey(null);
     } catch (e) {
       console.error("업체 추가 수금 처리 중 오류:", e);
@@ -7270,8 +7298,12 @@ function DetailBreakdownModal({
         paymentMethod: method,
         ...(depositorName ? { depositorName } : {}),
         note: "1차 수금",
+        isOnSite: false,
+        // 업소 단위 공용 원장 항목 (대상 기록 전체에 동일 복제, 합산 시 한 번만)
+        isShared: true,
       };
 
+      // 미수(UNPAID) 기록만 대상. 이미 현장 수금된 기록은 절대 건드리지 않는다.
       const updatePromises = unpaidRecords.map(async (r) => {
         const updates = {
           paymentMethod: method,
@@ -8356,12 +8388,9 @@ function DetailBreakdownModal({
                                       }
 
                                       const history = getRecordCollectionHistory(r);
-                                      const onSiteEntries = history.filter((entry, idx) => {
-                                        return (
-                                          idx === 0 &&
-                                          (!entry.note || entry.note.includes("현장") || !entry.note.includes("추가수금"))
-                                        );
-                                      });
+                                      const onSiteEntries = history.filter((entry, idx) =>
+                                        isOnSiteHistoryEntry(entry, idx, r),
+                                      );
 
                                       if (onSiteEntries.length === 0 && r.collectedAt) {
                                         onSiteEntries.push({
@@ -8562,12 +8591,9 @@ function DetailBreakdownModal({
                                           }
 
                                           const history = getRecordCollectionHistory(r);
-                                          const onSiteEntries = history.filter((entry, idx) => {
-                                            return (
-                                              idx === 0 &&
-                                              (!entry.note || entry.note.includes("현장") || !entry.note.includes("추가수금"))
-                                            );
-                                          });
+                                          const onSiteEntries = history.filter((entry, idx) =>
+                                            isOnSiteHistoryEntry(entry, idx, r),
+                                          );
 
                                           if (onSiteEntries.length === 0 && r.collectedAt) {
                                             onSiteEntries.push({
@@ -10784,6 +10810,20 @@ function DispatchFormModal({
       return;
     }
 
+    const clockedNameSet = new Set(workingStaff.map((s) => s.name));
+    const newRecordStaffNames = editRecord
+      ? formData.staffNames.filter((name) => !groupStaffNames.includes(name))
+      : formData.staffNames;
+    const notClockedIn = newRecordStaffNames.filter(
+      (name) => !clockedNameSet.has(name),
+    );
+    if (notClockedIn.length > 0) {
+      setError(
+        `출근하지 않은 직원에게는 새 근무기록을 만들 수 없습니다: ${notClockedIn.join(", ")}`,
+      );
+      return;
+    }
+
     setIsSubmitting(true);
     setError(null);
 
@@ -11003,10 +11043,15 @@ function DispatchFormModal({
                 formData.paymentMethod === "UNPAID"
                   ? null
                   : recordToUpdate.additionalCollectedAt || null,
+              // 기존 수금 이력은 그대로 유지. 단, 사용자가 이 폼에서 현금↔계좌를 직접 바꾼 경우에만
+              // 이 기록의 "현장 수금" 항목 수단을 함께 맞춘다 (업소 공용 항목은 변경하지 않음).
               collectionHistory:
                 formData.paymentMethod === "UNPAID"
                   ? []
-                  : recordToUpdate.collectionHistory || [],
+                  : syncOnSiteEntriesPaymentMethod(
+                      recordToUpdate,
+                      formData.paymentMethod,
+                    ),
               collectedAmount:
                 formData.paymentMethod === "UNPAID"
                   ? undefined
@@ -12066,4 +12111,26 @@ function DispatchFormModal({
                             <div className="absolute top-1 right-1">
                               <Check className="w-3 h-3 text-white" />
                             </div>
-                          )x�t��N�0��>�U�dp~DR	��H}'�n#;�oh�*e����x��w U�B���:���>nFp��aZi59��/�F�����y�ԟ�[2ɭ��%&㊝C�M����Ŷ��N�h<D��]d���y�=v�Z]�"{L֞�,ҭ�b�3��B�	.-:6���&j)�Z�3Hg��Q�Kb�yAF�*ǜ�.%���Z�]��C>W9�����;��6��W��B���{�b�jF�f���;Zq�(&KM�VA��E�W�(9�A�*�.s����   �� ?��
+                          )}
+                        </button>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+              <div className="p-4 border-t border-stone-100">
+                <button
+                  type="button"
+                  onClick={() => setIsStaffSelectorOpen(false)}
+                  className="w-full py-3 bg-stone-900 text-white rounded-2xl font-bold text-sm"
+                >
+                  선택 완료 ({formData.staffNames.length}명)
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
