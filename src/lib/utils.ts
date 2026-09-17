@@ -1248,8 +1248,6 @@ export function formatStaffNameComponents(fullName: string) {
   }
 
   // 2. If longer than 4 characters -> 위탁직원
-  // e.g. "하퍼 요셉(정인)" or "하퍼요셉정인"
-  // If has bracket e.g. "하퍼 요셉 (정인)"
   const bracketMatch = trimmed.match(/^([^(]+)\s*\(([^)]+)\)$/);
   if (bracketMatch) {
     const mainPart = bracketMatch[1].trim();
@@ -1259,21 +1257,185 @@ export function formatStaffNameComponents(fullName: string) {
       fullName: trimmed,
       category: mainPart.startsWith("하퍼") ? "하퍼" : mainPart.startsWith("퍼블릭") ? "퍼블릭" : "커피",
       namePart: mainPart,
-      affiliation: affPart,
+      affiliation: affPart || "위탁",
       isDirect: false,
     };
   }
 
-  // Otherwise take first 4 chars as main4 and remaining as affiliation
-  const main4 = cleanNoSpace.slice(0, 4);
-  const remaining = cleanNoSpace.slice(4);
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  let affiliation = "";
+  let main4 = "";
+
+  if (parts.length >= 3) {
+    // e.g. ["하퍼", "예슬", "샤넬"]
+    main4 = `${parts[0]} ${parts[1]}`;
+    affiliation = parts.slice(2).join(" ").trim();
+  } else if (parts.length === 2) {
+    // e.g. ["하퍼", "예슬샤넬"]
+    if (parts[1].length > 2) {
+      main4 = `${parts[0]} ${parts[1].slice(0, 2)}`;
+      affiliation = parts[1].slice(2).trim();
+    } else {
+      main4 = parts[0];
+      affiliation = parts[1].trim();
+    }
+  } else {
+    // e.g. "하퍼예슬샤넬"
+    main4 = `${cleanNoSpace.slice(0, 2)} ${cleanNoSpace.slice(2, 4)}`;
+    affiliation = cleanNoSpace.slice(4).trim();
+  }
+
+  affiliation = affiliation.replace(/^[\(\[\{]+|[\)\]\}]+$/g, "").trim();
+  if (!affiliation) {
+    affiliation = "위탁";
+  }
+
+  let category = "커피";
+  let namePart = cleanNoSpace.slice(0, 4);
+  if (cleanNoSpace.startsWith("하퍼") || cleanNoSpace.startsWith("하_")) {
+    category = "하퍼";
+    namePart = cleanNoSpace.slice(0, 4).replace(/^하[퍼_]?/, "");
+  } else if (cleanNoSpace.startsWith("퍼블릭") || cleanNoSpace.startsWith("퍼_")) {
+    category = "퍼블릭";
+    namePart = cleanNoSpace.slice(0, 4).replace(/^퍼[블릭_]?/, "");
+  } else if (cleanNoSpace.startsWith("커피") || cleanNoSpace.startsWith("커_")) {
+    category = "커피";
+    namePart = cleanNoSpace.slice(0, 4).replace(/^커[피_]?/, "");
+  }
 
   return {
-    main4,
+    main4: main4 || trimmed.slice(0, 5),
     fullName: trimmed,
-    category: main4.startsWith("하퍼") ? "하퍼" : main4.startsWith("퍼블릭") ? "퍼블릭" : "커피",
-    namePart: main4,
-    affiliation: remaining || "위탁",
+    category,
+    namePart: namePart || trimmed,
+    affiliation,
     isDirect: false,
   };
+}
+
+/**
+ * 소속(직속 vs 위탁/샤넬 등)을 기준으로 두 직원 이름이 동일인물인지 철저히 판별하는 함수.
+ * 직속 예슬과 샤넬 예슬처럼 동명이인이더라도 소속이 다르면 절대 같은 사람으로 간주하지 않습니다.
+ */
+export function isSameStaffIdentity(nameA: string, nameB: string): boolean {
+  if (!nameA || !nameB) return false;
+  const trimmedA = nameA.trim();
+  const trimmedB = nameB.trim();
+  if (trimmedA === trimmedB) return true;
+
+  const cleanA = trimmedA.replace(/\s+/g, "");
+  const cleanB = trimmedB.replace(/\s+/g, "");
+  if (cleanA === cleanB) return true;
+
+  const compA = formatStaffNameComponents(trimmedA);
+  const compB = formatStaffNameComponents(trimmedB);
+
+  // 1. 한 쪽은 직속이고 다른 쪽은 위탁인 경우 -> 절대 동일인이 아님!
+  if (compA.isDirect !== compB.isDirect) {
+    return false;
+  }
+
+  // 2. 둘 다 위탁인 경우 -> 소속(affiliation)이 반드시 일치해야 함
+  if (!compA.isDirect && !compB.isDirect) {
+    const cleanAffA = compA.affiliation.replace(/\s+/g, "").toLowerCase();
+    const cleanAffB = compB.affiliation.replace(/\s+/g, "").toLowerCase();
+    if (cleanAffA !== cleanAffB) {
+      return false;
+    }
+  }
+
+  // 3. 본명 4글자(공백 무시) 비교
+  const cleanMainA = compA.main4.replace(/\s+/g, "").toLowerCase();
+  const cleanMainB = compB.main4.replace(/\s+/g, "").toLowerCase();
+  return cleanMainA === cleanMainB;
+}
+
+/**
+ * 검색어에 따라 직원을 필터링할 때, 직속 직원과 위탁(샤넬 등) 직원의 동명 혼동을 방지하는 정밀 검색 함수.
+ * - 특정 직원 선택 시(targetStaffName): 해당 직원과 동일인(소속 일치)만 정확히 매칭
+ * - 직속 이름(4글자 이하, 예: "하퍼 예슬")으로 검색 시 -> 직속 직원만 매칭 (위탁 샤넬 예슬 완전 제외)
+ * - 소속명(예: "샤넬")이나 위탁 전체 이름(예: "하퍼 예슬 샤넬")으로 검색 시 -> 해당 소속 위탁 직원만 매칭
+ */
+export function matchesStaffSearch(
+  staffFullName: string,
+  searchTerm: string,
+  targetStaffName?: string
+): boolean {
+  if (!staffFullName) return false;
+
+  // 특정 직원을 콕 찍어서 열람한 경우(targetStaffName 지정)
+  if (targetStaffName && targetStaffName.trim()) {
+    const cleanTarget = targetStaffName.trim().replace(/\s+/g, "").toLowerCase();
+    const cleanSearch = (searchTerm || "").trim().replace(/\s+/g, "").toLowerCase();
+    const targetComp = formatStaffNameComponents(targetStaffName);
+    const cleanTargetMain4 = targetComp.main4.replace(/\s+/g, "").toLowerCase();
+
+    // 검색어가 타깃 직원의 이름(또는 본명4글자)과 일치하거나 비어있는 경우, 타깃 직원과 동일인인 것만 정확히 반환
+    if (!cleanSearch || cleanSearch === cleanTarget || cleanSearch === cleanTargetMain4) {
+      return isSameStaffIdentity(staffFullName, targetStaffName);
+    }
+  }
+
+  if (!searchTerm || !searchTerm.trim()) return true;
+  const term = searchTerm.trim().toLowerCase();
+  const cleanTerm = term.replace(/\s+/g, "");
+
+  const staffComp = formatStaffNameComponents(staffFullName);
+  const cleanStaff = staffFullName.replace(/\s+/g, "").toLowerCase();
+  const cleanMain4 = staffComp.main4.replace(/\s+/g, "").toLowerCase();
+  const cleanAff = staffComp.affiliation.replace(/\s+/g, "").toLowerCase();
+
+  // 1. 완전 일치 (공백 무시)
+  if (cleanStaff === cleanTerm) return true;
+
+  // 2. 검색어가 "직속"인 경우
+  if (cleanTerm === "직속") {
+    return staffComp.isDirect;
+  }
+
+  // 3. 검색어가 "위탁"인 경우
+  if (cleanTerm === "위탁") {
+    return !staffComp.isDirect;
+  }
+
+  // 4. 검색어가 특정 소속명(예: "샤넬", "골드" 등)과 일치하는 경우
+  if (cleanTerm === cleanAff) {
+    return !staffComp.isDirect;
+  }
+
+  // 검색어의 소속 성분 분석
+  const searchComp = formatStaffNameComponents(searchTerm);
+
+  // 직속 직원의 경우:
+  // 검색어에 위탁 소속명이나 "위탁" 키워드가 포함되어 있다면 직속 직원은 절대 매칭하지 않음!
+  if (staffComp.isDirect) {
+    if (!searchComp.isDirect && searchComp.affiliation !== "직속") {
+      return false;
+    }
+    if (term.includes("위탁")) {
+      return false;
+    }
+    return cleanMain4.includes(cleanTerm) || cleanTerm.includes(cleanMain4);
+  }
+
+  // 위탁 직원의 경우 (예: "하퍼 예슬 샤넬"):
+  // 만약 검색어가 소속명이 명시되지 않은 직속 형식(4글자 이하 순수 이름, 예: "하퍼 예슬", "예슬")이라면,
+  // 직속 직원을 찾는 검색이므로 위탁 직원은 절대 매칭하지 않음!
+  if (searchComp.isDirect && cleanTerm.length <= 4) {
+    return false;
+  }
+
+  // 위탁 직원은 검색어에 본명이나 소속이 포함된 경우 매칭
+  if (cleanTerm.includes(cleanAff)) {
+    const termWithoutAff = cleanTerm.replace(cleanAff, "");
+    if (!termWithoutAff || cleanMain4.includes(termWithoutAff) || termWithoutAff.includes(cleanMain4)) {
+      return true;
+    }
+  }
+
+  if (cleanStaff.includes(cleanTerm)) {
+    return true;
+  }
+
+  return false;
 }

@@ -774,6 +774,7 @@ export const addDispatch = async (data: Omit<DispatchRecord, 'id' | 'uid' | 'cre
       uid: FIXED_UID,
       createdAt: Timestamp.now(),
       wasUnpaid: data.paymentMethod === 'UNPAID',
+      isStaffPaid: data.isStaffPaid !== undefined ? data.isStaffPaid : false,
     };
 
     // Filter out undefined fields recursively
@@ -990,4 +991,72 @@ export const subscribeToBouncedRecords = (
     const errInfo = getErrorInfo(error, OperationType.LIST, BOUNCED_COLLECTION);
     console.error('Firestore Subscription Error: ', JSON.stringify(errInfo));
   });
+};
+
+export const subscribeToDispatchesByDateRange = (
+  startDate: string,
+  endDate: string,
+  callback: (records: DispatchRecord[]) => void,
+  onError?: (error: unknown) => void
+) => {
+  const q = query(
+    collection(db, COLLECTION_NAME),
+    where('uid', '==', FIXED_UID),
+    where('date', '>=', startDate),
+    where('date', '<=', endDate)
+  );
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const records = snapshot.docs.map((doc) =>
+        normalizeDispatchRecord(doc.id, doc.data() as Record<string, any>)
+      );
+      callback(records);
+    },
+    (error) => {
+      if (onError) onError(error);
+      const errInfo = getErrorInfo(error, OperationType.LIST, COLLECTION_NAME);
+      console.error('Firestore Dispatches Range Error: ', JSON.stringify(errInfo));
+    }
+  );
+};
+
+export const subscribeToBouncedByDateRange = (
+  startDate: string,
+  endDate: string,
+  callback: (records: BouncedRecord[]) => void,
+  onError?: (error: unknown) => void
+) => {
+  const q = query(
+    collection(db, BOUNCED_COLLECTION),
+    where('uid', '==', FIXED_UID),
+    where('date', '>=', startDate),
+    where('date', '<=', endDate)
+  );
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const records = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      } as BouncedRecord));
+      callback(records);
+    },
+    (error) => {
+      if (onError) onError(error);
+      const errInfo = getErrorInfo(error, OperationType.LIST, BOUNCED_COLLECTION);
+      console.error('Firestore Bounced Range Error: ', JSON.stringify(errInfo));
+    }
+  );
+};
+
+export const subscribeToAttendanceByDateRange = (
+  startDate: string,
+  endDate: string,
+  callback: (attendanceList: Array<{ date: string; staffIds: string[]; checkInTimes?: Record<string, any> }>) => void,
+  onError?: (error: Error) => void
+) => {
+  return subscribeToWeeklyAttendance(startDate, endDate, callback, onError);
 };

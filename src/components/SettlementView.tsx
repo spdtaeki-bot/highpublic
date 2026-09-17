@@ -12,6 +12,7 @@ import {
   Check,
   AlertCircle,
   X,
+  Clock,
 } from "lucide-react";
 import * as htmlToImage from "html-to-image";
 import { format, parseISO } from "date-fns";
@@ -24,6 +25,28 @@ import { twMerge } from "tailwind-merge";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+function parseTimestampToDate(ts: any): Date | null {
+  if (!ts) return null;
+  try {
+    if (ts instanceof Date) return isNaN(ts.getTime()) ? null : ts;
+    if (typeof ts.toDate === "function") {
+      const d = ts.toDate();
+      return d instanceof Date && !isNaN(d.getTime()) ? d : null;
+    }
+    if (typeof ts.seconds === "number") {
+      const d = new Date(ts.seconds * 1000);
+      return !isNaN(d.getTime()) ? d : null;
+    }
+    if (typeof ts === "string" || typeof ts === "number") {
+      const d = new Date(ts);
+      return !isNaN(d.getTime()) ? d : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 // Auto classify staff based on name length & suffix:
@@ -103,6 +126,7 @@ interface SettlementViewProps {
   records: DispatchRecord[];
   unpaidStaffRecords: DispatchRecord[];
   staff: Staff[];
+  workingStaffIds?: string[];
   checkInTimes: Record<string, any>;
   offStaffIds: string[];
   offTimes: Record<string, any>;
@@ -117,6 +141,7 @@ export function SettlementView({
   records,
   unpaidStaffRecords,
   staff,
+  workingStaffIds,
   checkInTimes,
   offStaffIds,
   offTimes,
@@ -163,7 +188,12 @@ export function SettlementView({
 
     // Initialize all checked-in staff or staff with records
     staff.forEach((s) => {
-      if (checkInTimes[s.id]) {
+      const isWorking = s.id
+        ? workingStaffIds
+          ? workingStaffIds.includes(s.id)
+          : Boolean(checkInTimes[s.id])
+        : false;
+      if (isWorking) {
         groups[s.name] = {
           records: [],
           unpaidRecords: [],
@@ -211,10 +241,11 @@ export function SettlementView({
       groups[name].totalTip += record.tip || 0;
       groups[name].totalCommission += record.commission;
 
-      if (record.isBanti) {
+      const units = Math.floor(record.durationHours);
+      const isBanti = record.durationHours % 1 !== 0 || Boolean(record.isBanti);
+      groups[name].fullTimeUnits += units;
+      if (isBanti) {
         groups[name].bantiUnits += 1;
-      } else {
-        groups[name].fullTimeUnits += Math.floor(record.durationHours);
       }
 
       if (!record.isStaffPaid) {
@@ -222,26 +253,13 @@ export function SettlementView({
       }
     });
 
-    // Populate unpaid from other days if any
+    // Populate unpaid from other days ONLY for staff who are already in groups (working today or has today's records)
     (unpaidStaffRecords || []).forEach((record) => {
       const name = record.staffName;
       if (!name) return;
-      if (!groups[name]) {
-        groups[name] = {
-          records: [],
-          unpaidRecords: [],
-          totalPaid: 0,
-          totalUnpaid: 0,
-          totalStaffPayment: 0,
-          totalTip: 0,
-          totalCommission: 0,
-          fullTimeUnits: 0,
-          bantiUnits: 0,
-          isAllStaffPaid: true,
-          totalBounceCount: 0,
-        };
+      if (groups[name]) {
+        groups[name].unpaidRecords.push(record);
       }
-      groups[name].unpaidRecords.push(record);
     });
 
     // Manual profit override & bounce count
@@ -260,6 +278,7 @@ export function SettlementView({
     records,
     unpaidStaffRecords,
     staff,
+    workingStaffIds,
     checkInTimes,
     manualDailyProfits,
     bouncedRecords,
@@ -279,6 +298,8 @@ export function SettlementView({
         totalTip: number;
         totalCommission: number;
         totalDispatches: number;
+        paidExpectedDeposit: number;
+        remainingExpectedDeposit: number;
         allRecords: DispatchRecord[];
         isAllAffiliationPaid: boolean;
         unpaidStaffCount: number;
@@ -302,6 +323,10 @@ export function SettlementView({
           bantiUnits: number;
           isAllStaffPaid: boolean;
           totalUnpaid: number;
+          isWorking?: boolean;
+          isUnworkedWithRecords?: boolean;
+          paidAtFormatted?: string;
+          paidAtFullFormatted?: string;
         }[];
       }
     > = {};
@@ -319,6 +344,12 @@ export function SettlementView({
       const staffItem = staff.find((s) => s.name === name);
       const staffId = staffItem?.id;
       const isOff = staffId ? offStaffIds.includes(staffId) : false;
+      const isWorking = staffId
+        ? workingStaffIds
+          ? workingStaffIds.includes(staffId)
+          : Boolean(checkInTimes[staffId])
+        : false;
+      const isUnworkedWithRecords = !isWorking && group.records.length > 0;
       const effType: "COFFEE" | "PUBLIC" | "HOPPER" =
         staffItem?.type === "HOPPER" ||
         parsed.category === "하퍼" ||
@@ -363,6 +394,8 @@ export function SettlementView({
           totalTip: 0,
           totalCommission: 0,
           totalDispatches: 0,
+          paidExpectedDeposit: 0,
+          remainingExpectedDeposit: 0,
           allRecords: [],
           isAllAffiliationPaid: true,
           unpaidStaffCount: 0,
@@ -383,9 +416,39 @@ export function SettlementView({
       if (group.records.length > 0) {
         if (group.isAllStaffPaid) {
           aff.paidStaffCount += 1;
+          aff.paidExpectedDeposit += expectedDeposit;
         } else {
           aff.isAllAffiliationPaid = false;
           aff.unpaidStaffCount += 1;
+          aff.remainingExpectedDeposit += expectedDeposit;
+        }
+      }
+
+      // Extract latest payment time for this staff member
+      const paidDates = group.records
+        .filter((r) => r.isStaffPaid && r.staffPaidAt)
+        .map((r) => parseTimestampToDate(r.staffPaidAt))
+        .filter((d): d is Date => d !== null);
+
+      const latestPaidAt =
+        paidDates.length > 0
+          ? new Date(Math.max(...paidDates.map((d) => d.getTime())))
+          : null;
+
+      let paidAtFormatted = "";
+      let paidAtFullFormatted = "";
+      if (latestPaidAt) {
+        try {
+          const datePart = format(latestPaidAt, "yyyy-MM-dd");
+          if (selectedDate && datePart !== selectedDate) {
+            paidAtFormatted = format(latestPaidAt, "MM/dd HH:mm");
+          } else {
+            paidAtFormatted = format(latestPaidAt, "HH:mm");
+          }
+          paidAtFullFormatted = format(latestPaidAt, "yyyy-MM-dd HH:mm");
+        } catch {
+          paidAtFormatted = "";
+          paidAtFullFormatted = "";
         }
       }
 
@@ -408,6 +471,10 @@ export function SettlementView({
         bantiUnits: group.bantiUnits,
         isAllStaffPaid: group.isAllStaffPaid,
         totalUnpaid: group.totalUnpaid,
+        isWorking,
+        isUnworkedWithRecords,
+        paidAtFormatted,
+        paidAtFullFormatted,
       });
     });
 
@@ -425,7 +492,7 @@ export function SettlementView({
       if (!a.isDirect && b.isDirect) return 1;
       return a.affiliationName.localeCompare(b.affiliationName, "ko");
     });
-  }, [staffGroups, staff, offStaffIds]);
+  }, [staffGroups, staff, offStaffIds, checkInTimes, workingStaffIds]);
 
   // Selected Affiliation for Batch Modal
   const activeBatchGroup = useMemo(() => {
@@ -476,6 +543,10 @@ export function SettlementView({
   // Overall totals across all affiliations
   const grandTotals = useMemo(() => {
     let totalDeposit = 0;
+    let paidDeposit = 0;
+    let remainingDeposit = 0;
+    let paidStaffCount = 0;
+    let unpaidStaffCount = 0;
     let directDeposit = 0;
     let delegatedDeposit = 0;
     let totalStaffCount = 0;
@@ -485,6 +556,10 @@ export function SettlementView({
 
     affiliationGroups.forEach((aff) => {
       totalDeposit += aff.totalExpectedDeposit;
+      paidDeposit += aff.paidExpectedDeposit;
+      remainingDeposit += aff.remainingExpectedDeposit;
+      paidStaffCount += aff.paidStaffCount;
+      unpaidStaffCount += aff.unpaidStaffCount;
       totalDispatches += aff.totalDispatches;
       totalStaffCount += aff.staffList.length;
       if (aff.isDirect) {
@@ -498,6 +573,10 @@ export function SettlementView({
 
     return {
       totalDeposit,
+      paidDeposit,
+      remainingDeposit,
+      paidStaffCount,
+      unpaidStaffCount,
       directDeposit,
       delegatedDeposit,
       totalStaffCount,
@@ -511,6 +590,27 @@ export function SettlementView({
   const delegatedGroups = useMemo(() => {
     return affiliationGroups.filter((aff) => !aff.isDirect);
   }, [affiliationGroups]);
+
+  // Detect any staff with records who are NOT checked in (미출근 상태)
+  const unworkedStaffWithRecords = useMemo(() => {
+    const list: { name: string; count: number; payment: number }[] = [];
+    Object.entries(staffGroups).forEach(([name, grp]) => {
+      const staffObj = staff.find((s) => s.name === name);
+      const isWorking = staffObj?.id
+        ? workingStaffIds
+          ? workingStaffIds.includes(staffObj.id)
+          : Boolean(checkInTimes[staffObj.id])
+        : false;
+      if (!isWorking && grp.records.length > 0) {
+        list.push({
+          name,
+          count: grp.records.length,
+          payment: grp.totalStaffPayment,
+        });
+      }
+    });
+    return list;
+  }, [staffGroups, staff, checkInTimes, workingStaffIds]);
 
   // Perfect Desktop-Identical Capture Engine:
   // Captures from the dedicated desktop render template so the output is ALWAYS identical to the desktop computer view
@@ -570,6 +670,26 @@ export function SettlementView({
 
   return (
     <div className="space-y-6 pb-12 w-full">
+      {/* Warning banner for Unworked Staff with records */}
+      {unworkedStaffWithRecords.length > 0 && (
+        <div className="bg-amber-500/10 border-2 border-amber-500/30 rounded-2xl p-4 text-amber-900 flex items-start gap-3 shadow-xs">
+          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="space-y-1 text-xs">
+            <p className="font-black text-sm text-amber-950">
+              ⚠️ 미출근 상태인 직원의 파견 기록이 감지되었습니다 ({unworkedStaffWithRecords.length}명)
+            </p>
+            <p className="text-amber-900 font-medium leading-relaxed">
+              출근 명단에 등록되지 않았으나 파견 기록이 존재하는 직원이 있습니다:{" "}
+              <span className="font-black text-amber-950 underline">
+                {unworkedStaffWithRecords.map((u) => `${u.name} (${u.count}건 / ${(u.payment / 10000).toFixed(1)}만원)`).join(", ")}
+              </span>
+              <br />
+              인원현황 탭에서 <span className="font-black underline">[출근 등록]</span>을 하거나, 잘못 등록된 기록인지 확인 후 정산 및 지급을 진행하세요.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Top Grand Total Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3.5 w-full">
         {/* Main Grand Total */}
@@ -611,6 +731,80 @@ export function SettlementView({
               </div>
             </div>
           </div>
+
+          {/* 입금 완료 vs 남은 금액 분할 표시 */}
+          <div className="grid grid-cols-2 gap-2.5 mt-3.5 pt-3.5 border-t border-stone-800">
+            {/* 입금 완료 */}
+            <div className="bg-stone-800/70 border border-emerald-500/30 rounded-xl p-2.5 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  입금 완료
+                </span>
+                <span className="text-[10px] font-bold text-emerald-300 bg-emerald-950/70 px-1.5 py-0.5 rounded border border-emerald-500/30">
+                  {grandTotals.paidStaffCount}명
+                </span>
+              </div>
+              <div className="mt-1.5">
+                <div className="text-base sm:text-lg font-black text-emerald-300 tracking-tight whitespace-nowrap">
+                  {(grandTotals.paidDeposit / 10000).toFixed(1)}
+                  <span className="text-xs font-bold ml-0.5 text-emerald-400">만원</span>
+                </div>
+                <div className="text-[10px] text-stone-400 font-medium whitespace-nowrap">
+                  ({grandTotals.paidDeposit.toLocaleString()}원)
+                </div>
+              </div>
+            </div>
+
+            {/* 남은 금액 */}
+            <div className="bg-stone-800/70 border border-amber-500/30 rounded-xl p-2.5 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-amber-400 flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  남은 금액
+                </span>
+                <span className="text-[10px] font-bold text-amber-300 bg-amber-950/70 px-1.5 py-0.5 rounded border border-amber-500/30">
+                  {grandTotals.unpaidStaffCount}명
+                </span>
+              </div>
+              <div className="mt-1.5">
+                <div className="text-base sm:text-lg font-black text-amber-300 tracking-tight whitespace-nowrap">
+                  {(grandTotals.remainingDeposit / 10000).toFixed(1)}
+                  <span className="text-xs font-bold ml-0.5 text-amber-400">만원</span>
+                </div>
+                <div className="text-[10px] text-stone-400 font-medium whitespace-nowrap">
+                  ({grandTotals.remainingDeposit.toLocaleString()}원)
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {grandTotals.totalDeposit > 0 && (
+            <div className="mt-2.5">
+              <div className="flex justify-between items-center text-[10px] text-stone-400 mb-1 font-medium">
+                <span className="text-emerald-400 font-bold">
+                  입금율 {Math.round((grandTotals.paidDeposit / grandTotals.totalDeposit) * 100)}%
+                </span>
+                <span>
+                  잔여 {Math.round((grandTotals.remainingDeposit / grandTotals.totalDeposit) * 100)}%
+                </span>
+              </div>
+              <div className="w-full h-1.5 bg-stone-800 rounded-full overflow-hidden flex">
+                <div
+                  className="bg-emerald-500 h-full transition-all duration-300"
+                  style={{
+                    width: `${Math.min(100, Math.max(0, (grandTotals.paidDeposit / grandTotals.totalDeposit) * 100))}%`,
+                  }}
+                />
+                <div
+                  className="bg-amber-500/60 h-full transition-all duration-300"
+                  style={{
+                    width: `${Math.min(100, Math.max(0, (grandTotals.remainingDeposit / grandTotals.totalDeposit) * 100))}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center gap-2 mt-4 pt-3 border-t border-stone-800/80 text-xs">
             <span className="bg-stone-800 text-stone-300 px-2 py-0.5 rounded-md font-bold whitespace-nowrap">
@@ -891,6 +1085,11 @@ export function SettlementView({
                               퇴근
                             </span>
                           )}
+                          {s.isUnworkedWithRecords && (
+                            <span className="text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-300 px-1 py-0.5 rounded shrink-0 shadow-2xs whitespace-nowrap">
+                              ⚠️ 미출근
+                            </span>
+                          )}
                         </div>
 
                         {/* Final Expected Deposit Badge */}
@@ -943,14 +1142,24 @@ export function SettlementView({
                         </div>
 
                         {/* Status Chip */}
-                        <div className="shrink-0 mt-1 sm:mt-0">
+                        <div className="shrink-0 mt-1 sm:mt-0 flex flex-col items-end">
                           {s.recordCount === 0 ? (
                             <span className="text-stone-400 text-[10px]">-</span>
                           ) : s.isAllStaffPaid ? (
-                            <span className="px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-black inline-flex items-center gap-0.5">
-                              <Check className="w-2.5 h-2.5 text-emerald-600" />
-                              지급완료
-                            </span>
+                            <div className="flex flex-col items-center">
+                              <span className="px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-black inline-flex items-center gap-0.5">
+                                <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                지급완료
+                              </span>
+                              {s.paidAtFormatted && (
+                                <span
+                                  title={s.paidAtFullFormatted ? `지급 시점: ${s.paidAtFullFormatted}` : undefined}
+                                  className="text-[9px] font-semibold text-stone-500 mt-0.5 whitespace-nowrap tracking-tight leading-none"
+                                >
+                                  {s.paidAtFormatted}
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-black">
                               미지급
@@ -1001,6 +1210,11 @@ export function SettlementView({
                                 {s.isOff && (
                                   <span className="text-[9px] font-bold bg-stone-100 text-stone-400 px-1 py-0.5 rounded whitespace-nowrap">
                                     퇴근
+                                  </span>
+                                )}
+                                {s.isUnworkedWithRecords && (
+                                  <span className="text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-300 px-1.5 py-0.5 rounded shadow-2xs whitespace-nowrap">
+                                    ⚠️ 미출근
                                   </span>
                                 )}
                               </div>
@@ -1084,10 +1298,20 @@ export function SettlementView({
                               {s.recordCount === 0 ? (
                                 <span className="text-stone-300 text-[10px] font-bold">-</span>
                               ) : s.isAllStaffPaid ? (
-                                <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black inline-flex items-center gap-0.5 whitespace-nowrap">
-                                  <Check className="w-2.5 h-2.5 text-emerald-600" />
-                                  지급완료
-                                </span>
+                                <div className="inline-flex flex-col items-center justify-center">
+                                  <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black inline-flex items-center gap-0.5 whitespace-nowrap">
+                                    <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                    지급완료
+                                  </span>
+                                  {s.paidAtFormatted && (
+                                    <span
+                                      title={s.paidAtFullFormatted ? `지급 시점: ${s.paidAtFullFormatted}` : undefined}
+                                      className="text-[9.5px] font-semibold text-stone-500 mt-0.5 whitespace-nowrap tracking-tight leading-none"
+                                    >
+                                      {s.paidAtFormatted}
+                                    </span>
+                                  )}
+                                </div>
                               ) : (
                                 <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-black whitespace-nowrap">
                                   미지급
@@ -1169,6 +1393,51 @@ export function SettlementView({
                   <span className="text-xs font-medium text-stone-400">
                     ({grandTotals.totalDeposit.toLocaleString()}원)
                   </span>
+                </div>
+              </div>
+            </div>
+
+            {/* 입금 완료 vs 남은 금액 분할 표시 */}
+            <div className="grid grid-cols-2 gap-3 mt-3.5 pt-3.5 border-t border-stone-800">
+              <div className="bg-stone-800/80 border border-emerald-500/30 rounded-xl p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    입금 완료
+                  </span>
+                  <span className="text-xs font-bold text-emerald-300 bg-emerald-950/70 px-2 py-0.5 rounded border border-emerald-500/30">
+                    {grandTotals.paidStaffCount}명
+                  </span>
+                </div>
+                <div className="mt-1.5">
+                  <div className="text-xl font-black text-emerald-300">
+                    {(grandTotals.paidDeposit / 10000).toFixed(1)}
+                    <span className="text-sm font-bold ml-1 text-emerald-400">만원</span>
+                  </div>
+                  <div className="text-xs text-stone-400 font-medium">
+                    ({grandTotals.paidDeposit.toLocaleString()}원)
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-stone-800/80 border border-amber-500/30 rounded-xl p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-amber-400 flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    남은 금액
+                  </span>
+                  <span className="text-xs font-bold text-amber-300 bg-amber-950/70 px-2 py-0.5 rounded border border-amber-500/30">
+                    {grandTotals.unpaidStaffCount}명
+                  </span>
+                </div>
+                <div className="mt-1.5">
+                  <div className="text-xl font-black text-amber-300">
+                    {(grandTotals.remainingDeposit / 10000).toFixed(1)}
+                    <span className="text-sm font-bold ml-1 text-amber-400">만원</span>
+                  </div>
+                  <div className="text-xs text-stone-400 font-medium">
+                    ({grandTotals.remainingDeposit.toLocaleString()}원)
+                  </div>
                 </div>
               </div>
             </div>
@@ -1265,8 +1534,17 @@ export function SettlementView({
                   <tbody className="divide-y divide-stone-100">
                     {aff.staffList.map((s) => (
                       <tr key={`cap-full-row-${s.rawName}`}>
-                        <td className="py-3 px-3 whitespace-nowrap font-bold text-stone-900">
-                          {s.displayName}
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-stone-900">
+                              {s.displayName}
+                            </span>
+                            {s.isUnworkedWithRecords && (
+                              <span className="text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-300 px-1 py-0.5 rounded whitespace-nowrap">
+                                ⚠️ 미출근
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="py-3 px-2 text-center whitespace-nowrap">
                           <span
@@ -1314,9 +1592,16 @@ export function SettlementView({
                           {s.recordCount === 0 ? (
                             <span className="text-stone-300 text-[10px]">-</span>
                           ) : s.isAllStaffPaid ? (
-                            <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black">
-                              지급완료
-                            </span>
+                            <div className="inline-flex flex-col items-center justify-center">
+                              <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black">
+                                지급완료
+                              </span>
+                              {s.paidAtFormatted && (
+                                <span className="text-[9.5px] font-semibold text-stone-500 mt-0.5 whitespace-nowrap tracking-tight leading-none">
+                                  {s.paidAtFormatted}
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-black">
                               미지급
@@ -1432,8 +1717,17 @@ export function SettlementView({
               <tbody className="divide-y divide-stone-100">
                 {aff.staffList.map((s) => (
                   <tr key={`cap-ind-row-${s.rawName}`}>
-                    <td className="py-3 px-3 whitespace-nowrap font-bold text-stone-900 text-sm">
-                      {s.displayName}
+                    <td className="py-3 px-3 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-stone-900 text-sm">
+                          {s.displayName}
+                        </span>
+                        {s.isUnworkedWithRecords && (
+                          <span className="text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-300 px-1 py-0.5 rounded whitespace-nowrap">
+                            ⚠️ 미출근
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-3 px-2 text-center whitespace-nowrap">
                       <span
@@ -1481,9 +1775,16 @@ export function SettlementView({
                       {s.recordCount === 0 ? (
                         <span className="text-stone-300 text-[10px]">-</span>
                       ) : s.isAllStaffPaid ? (
-                        <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black">
-                          지급완료
-                        </span>
+                        <div className="inline-flex flex-col items-center justify-center">
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black">
+                            지급완료
+                          </span>
+                          {s.paidAtFormatted && (
+                            <span className="text-[9.5px] font-semibold text-stone-500 mt-0.5 whitespace-nowrap tracking-tight leading-none">
+                              {s.paidAtFormatted}
+                            </span>
+                          )}
+                        </div>
                       ) : (
                         <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-black">
                           미지급
@@ -1594,9 +1895,16 @@ export function SettlementView({
                       {s.recordCount === 0 ? (
                         <span className="text-[10px] text-stone-400">-</span>
                       ) : s.isAllStaffPaid ? (
-                        <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold text-[10px]">
-                          지급완료
-                        </span>
+                        <div className="flex flex-col items-end">
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold text-[10px]">
+                            지급완료
+                          </span>
+                          {s.paidAtFormatted && (
+                            <span className="text-[9px] text-stone-400 font-medium mt-0.5 whitespace-nowrap leading-none">
+                              {s.paidAtFormatted}
+                            </span>
+                          )}
+                        </div>
                       ) : (
                         <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-bold text-[10px]">
                           미지급

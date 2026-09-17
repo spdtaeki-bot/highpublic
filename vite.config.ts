@@ -23,5 +23,29 @@ export default defineConfig(({mode}) => {
       strictPort: true,
       hmr: false, // HMR을 꺼서 브라우저 세션 충돌을 방지합니다.
     },
+    build: {
+      chunkSizeWarningLimit: 1000,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules/firebase')) {
+              return 'vendor-firebase';
+            }
+            if (id.includes('node_modules/motion')) {
+              return 'vendor-motion';
+            }
+            if (id.includes('node_modules/lucide-react')) {
+              return 'vendor-lucide';
+            }
+            if (id.includes('node_modules/date-fns')) {
+              return 'vendor-date-fns';
+            }
+            if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
+              return 'vendor-react';
+            }
+          },
+        },
+      },
+    },
   };
 });

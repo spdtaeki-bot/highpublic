@@ -206,12 +206,18 @@ export function ChoiceSetupModal({
 
             {/* Quick Suggestions */}
             {filteredEstablishments.length > 0 && (
-              <div className="flex flex-wrap gap-1 pt-1 max-h-24 overflow-y-auto">
+              <div className="flex flex-wrap justify-end gap-1 pt-1 max-h-24 overflow-y-auto">
                 {filteredEstablishments.map((est) => (
                   <button
                     key={est}
                     type="button"
-                    onClick={() => setEstablishmentName(est)}
+                    onClick={() => {
+                      setEstablishmentName(est);
+                      inputRef.current?.blur();
+                      if (document.activeElement instanceof HTMLElement) {
+                        document.activeElement.blur();
+                      }
+                    }}
                     className={cn(
                       "px-2 py-1 rounded-lg text-[11px] font-extrabold border transition-all cursor-pointer",
                       establishmentName === est
@@ -252,14 +258,6 @@ export function ChoiceSetupModal({
               <div className="flex items-center gap-1">
                 <button
                   type="button"
-                  onClick={() => adjustMinutes(-10)}
-                  className="px-2 py-2.5 bg-stone-100 hover:bg-stone-200 active:scale-95 text-stone-700 text-[11px] font-black rounded-xl transition-all cursor-pointer"
-                  title="10분 전"
-                >
-                  -10분
-                </button>
-                <button
-                  type="button"
                   onClick={() => adjustMinutes(-5)}
                   className="px-2 py-2.5 bg-stone-100 hover:bg-stone-200 active:scale-95 text-stone-700 text-[11px] font-black rounded-xl transition-all cursor-pointer"
                   title="5분 전"
@@ -276,11 +274,19 @@ export function ChoiceSetupModal({
                 </button>
                 <button
                   type="button"
-                  onClick={() => adjustMinutes(10)}
+                  onClick={() => adjustMinutes(-1)}
                   className="px-2 py-2.5 bg-stone-100 hover:bg-stone-200 active:scale-95 text-stone-700 text-[11px] font-black rounded-xl transition-all cursor-pointer"
-                  title="10분 후"
+                  title="1분 전"
                 >
-                  +10분
+                  -1분
+                </button>
+                <button
+                  type="button"
+                  onClick={() => adjustMinutes(1)}
+                  className="px-2 py-2.5 bg-stone-100 hover:bg-stone-200 active:scale-95 text-stone-700 text-[11px] font-black rounded-xl transition-all cursor-pointer"
+                  title="1분 후"
+                >
+                  +1분
                 </button>
               </div>
             </div>

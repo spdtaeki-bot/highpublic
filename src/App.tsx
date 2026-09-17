@@ -7,6 +7,8 @@ import React, {
   ReactNode,
   ErrorInfo,
   useDeferredValue,
+  lazy,
+  Suspense,
 } from "react";
 import {
   Plus,
@@ -21,6 +23,7 @@ import {
   ChevronLeft,
   ChevronRight,
   LayoutDashboard,
+  BarChart3,
   History,
   Wallet,
   AlertCircle,
@@ -45,6 +48,8 @@ import {
   Database,
   Sparkles,
   Play,
+  RotateCcw,
+  Activity,
 } from "lucide-react";
 import * as htmlToImage from "html-to-image";
 import { motion, AnimatePresence } from "motion/react";
@@ -85,7 +90,6 @@ import {
   addBouncedRecord,
   deleteBouncedRecord,
   subscribeToBouncedRecords,
-  testConnection,
   subscribeToStaff,
   subscribeToAttendance,
   subscribeToWeeklyAttendance,
@@ -103,8 +107,9 @@ import {
   addEstablishment,
   deleteEstablishment,
 } from "./services/dispatchService";
-import { SettlementView } from "./components/SettlementView";
-import { UnpaidDetailView } from "./components/UnpaidDetailView";
+const SettlementView = lazy(() => import("./components/SettlementView").then(m => ({ default: m.SettlementView })));
+const UnpaidDetailView = lazy(() => import("./components/UnpaidDetailView").then(m => ({ default: m.UnpaidDetailView })));
+const StatsView = lazy(() => import("./components/StatsView").then(m => ({ default: m.StatsView })));
 import { CollectionRoundBadges } from "./components/CollectionRoundBadges";
 import { ChoiceSetupModal } from "./components/ChoiceSetupModal";
 import { ChoiceActionModal } from "./components/ChoiceActionModal";
@@ -116,6 +121,8 @@ import {
   splitCollectionHistory,
   isOnSiteHistoryEntry,
   syncOnSiteEntriesPaymentMethod,
+  isSameStaffIdentity,
+  matchesStaffSearch,
 } from "./lib/utils";
 
 function cn(...inputs: ClassValue[]) {
@@ -320,11 +327,8 @@ export default function App() {
     return localStorage.getItem("office_auth") === "true";
   });
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(() => {
-    return localStorage.getItem("office_auth") === "true";
-  });
+  const [loading, setLoading] = useState(false);
   const [_records, setRecords] = useState<DispatchRecord[]>([]);
-  const [showLoadingUI, setShowLoadingUI] = useState(false);
 
   // Global filters
   const [globalEmploymentFilter, setGlobalEmploymentFilter] = useState<
@@ -423,16 +427,6 @@ export default function App() {
       .filter((r) => filteredStaffNameSet.has(r.staffName));
   }, [_unpaidStaffRecords, filteredStaffNameSet, staffRenameMap]);
 
-  useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (loading && isAuthenticated && _records.length === 0) {
-      timer = setTimeout(() => setShowLoadingUI(true), 300); // 300ms delay
-    } else {
-      setShowLoadingUI(false);
-    }
-    return () => clearTimeout(timer);
-  }, [loading, isAuthenticated, _records.length]);
-
   const [establishments, setEstablishments] = useState<
     { id: string; name: string }[]
   >([]);
@@ -516,9 +510,7 @@ export default function App() {
     });
     return counts;
   }, [weeklyAttendanceData, selectedDate, checkInTimes]);
-  const [isFormOpen, setIsFormOpen] = useState(() => {
-    return localStorage.getItem("office_is_form_open") === "true";
-  });
+  const [isFormOpen, setIsFormOpen] = useState(false);
   const [isStaffModalOpen, setIsStaffModalOpen] = useState(() => {
     return localStorage.getItem("office_is_staff_modal_open") === "true";
   });
@@ -526,6 +518,7 @@ export default function App() {
     type: "revenue" | "commission" | "staffPayment" | "unpaid";
     isOpen: boolean;
     initialSearchTerm?: string;
+    targetStaffName?: string;
   }>(() => {
     const stored = localStorage.getItem("office_detail_modal");
     return stored ? JSON.parse(stored) : { type: "revenue", isOpen: false };
@@ -545,43 +538,8 @@ export default function App() {
     currentCalculatedProfit: number;
     currentManualProfit?: number;
   } | null>(null);
-  const [editingRecord, setEditingRecord] = useState<DispatchRecord | null>(
-    () => {
-      const stored = localStorage.getItem("office_editing_record");
-      if (!stored) return null;
-      try {
-        const parsed = JSON.parse(stored);
-        // Revive timestamps if they were serialized as objects
-        const revive = (obj: any) => {
-          if (obj && typeof obj === "object" && obj.seconds !== undefined) {
-            return new Timestamp(obj.seconds, obj.nanoseconds);
-          }
-          return obj;
-        };
-        if (parsed.startTime) parsed.startTime = revive(parsed.startTime);
-        if (parsed.endTime) parsed.endTime = revive(parsed.endTime);
-        if (parsed.createdAt) parsed.createdAt = revive(parsed.createdAt);
-        if (parsed.collectedAt) parsed.collectedAt = revive(parsed.collectedAt);
-        if (parsed.additionalCollectedAt) parsed.additionalCollectedAt = revive(parsed.additionalCollectedAt);
-        if (parsed.collectionHistory && Array.isArray(parsed.collectionHistory)) {
-          parsed.collectionHistory = parsed.collectionHistory.map((h: any) => ({
-            ...h,
-            collectedAt: revive(h.collectedAt),
-          }));
-        }
-        if (parsed.staffPaidAt) parsed.staffPaidAt = revive(parsed.staffPaidAt);
-        return parsed;
-      } catch {
-        return null;
-      }
-    },
-  );
-  const [preSelectedStaffNames, setPreSelectedStaffNames] = useState<string[]>(
-    () => {
-      const stored = localStorage.getItem("office_pre_selected_staff");
-      return stored ? JSON.parse(stored) : [];
-    },
-  );
+  const [editingRecord, setEditingRecord] = useState<DispatchRecord | null>(null);
+  const [preSelectedStaffNames, setPreSelectedStaffNames] = useState<string[]>([]);
   const [authError, setAuthError] = useState<string | null>(null);
   const [bouncedRecords, setBouncedRecords] = useState<BouncedRecord[]>([]);
   const [selectedBouncedStaff, setSelectedBouncedStaff] = useState<string | null>(null);
@@ -589,11 +547,12 @@ export default function App() {
     string | null
   >(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"list" | "settlement" | "unpaid">(() => {
+  const [viewMode, setViewMode] = useState<"list" | "settlement" | "unpaid" | "stats">(() => {
     const saved = localStorage.getItem("office_view_mode");
     if (saved === "timeline") return "settlement";
     if (saved === "unpaid") return "unpaid";
-    return (saved as "list" | "settlement" | "unpaid") || "list";
+    if (saved === "stats") return "stats";
+    return (saved as "list" | "settlement" | "unpaid" | "stats") || "list";
   });
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallBtn, setShowInstallBtn] = useState(false);
@@ -602,6 +561,10 @@ export default function App() {
     message: string;
     actionLabel?: string;
     onAction?: () => void;
+  } | null>(null);
+  const [confirmConfig, setConfirmConfig] = useState<{
+    message: string;
+    action: () => void | Promise<void>;
   } | null>(null);
   const [bounceModalConfig, setBounceModalConfig] = useState<{
     isOpen: boolean;
@@ -616,6 +579,7 @@ export default function App() {
     staffNames: string[];
     initialEstablishmentName: string;
     initialTime?: string;
+    choiceEntryTime?: string;
   } | null>(null);
   const [isBatchDelegatedProfitModalOpen, setIsBatchDelegatedProfitModalOpen] =
     useState(false);
@@ -691,79 +655,21 @@ export default function App() {
   };
 
   const handleFocusStaff = (staffName: string) => {
-    const focusAndHighlight = () => {
-      setHighlightedStaffColumn(staffName);
-
-      const staffCard = document.getElementById(`staff-card-${staffName}`);
-      const staffColumn = document.getElementById(`staff-column-${staffName}`);
-
-      if (staffColumn) {
-        try {
-          staffColumn.scrollIntoView({
-            behavior: "auto",
-            inline: "center",
-            block: "nearest",
-          });
-        } catch (e) {
-          staffColumn.scrollIntoView();
-        }
-      }
-
-      if (staffCard) {
-        try {
-          staffCard.scrollIntoView({
-            behavior: "auto",
-            inline: "center",
-            block: "center",
-          });
-        } catch (e) {
-          staffCard.scrollIntoView();
-        }
-      } else if (!staffColumn) {
-        const attendanceSection = document.getElementById("attendance-status-section");
-        if (attendanceSection) {
-          try {
-            attendanceSection.scrollIntoView({
-              behavior: "auto",
-              block: "center",
-            });
-          } catch (e) {
-            attendanceSection.scrollIntoView();
-          }
-        }
-      }
-      setTimeout(() => setHighlightedStaffColumn(null), 3000);
-    };
-
-    focusAndHighlight();
+    handleFocusStaffRecord(staffName);
   };
 
   const handleFocusStaffRecord = (staffName: string) => {
-    const targetStaffMain4 = formatStaffNameComponents(staffName).main4;
+    if (viewMode !== "list") {
+      setViewMode("list");
+    }
 
-    // 현재 선택된 날짜의 records에서 해당 직원의 기록 검색
+    // 현재 선택된 날짜의 records에서 해당 직원의 기록 검색 (소속까지 완벽히 일치하는 직원만 엄격히 검색)
     const staffRecords = records.filter((r) => {
-      const rMain4 = formatStaffNameComponents(r.staffName || "").main4;
-      return r.staffName === staffName || (rMain4 && rMain4 === targetStaffMain4);
+      return isSameStaffIdentity(r.staffName || "", staffName);
     });
 
-    if (staffRecords.length === 0) {
-      // 파견 기록이 없으면 리스트/타임라인의 해당 직원 컬럼으로 스크롤 이동
-      const staffColumn =
-        document.getElementById(`staff-column-${staffName}`) ||
-        document.getElementById(`staff-timeline-column-${staffName}`);
-
-      if (staffColumn) {
-        staffColumn.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
-        setHighlightedStaffColumn(staffName);
-        setTimeout(() => setHighlightedStaffColumn(null), 3000);
-      } else {
-        setAlertConfig({
-          message: `${staffName} 님의 오늘 등록된 파견(업무) 기록이 없습니다.`,
-        });
-      }
-      return;
-    }
+    setHighlightedStaffColumn(staffName);
+    setTimeout(() => setHighlightedStaffColumn(null), 3000);
 
     // 1) 진행 중인 파견 기록 우선 선택 (startTime === endTime)
     let targetRecord = staffRecords.find((r) => {
@@ -774,7 +680,7 @@ export default function App() {
     });
 
     // 2) 진행 중인 기록이 없으면 가장 최근 파견 기록 선택
-    if (!targetRecord) {
+    if (!targetRecord && staffRecords.length > 0) {
       const sorted = [...staffRecords].sort((a, b) => {
         const getTs = (t: any) => {
           if (!t) return 0;
@@ -789,21 +695,72 @@ export default function App() {
     if (targetRecord && targetRecord.id) {
       const recordId = targetRecord.id;
       setHighlightedId(recordId);
+      setTimeout(() => setHighlightedId(null), 3000);
+    }
 
-      setTimeout(() => {
-        const element = document.getElementById(`record-${recordId}`);
-        if (element) {
-          element.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
-        } else {
-          const staffColumn =
-            document.getElementById(`staff-column-${staffName}`) ||
-            document.getElementById(`staff-timeline-column-${staffName}`);
-          if (staffColumn) {
-            staffColumn.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    const instantFocus = () => {
+      const staffColumn =
+        document.getElementById(`staff-column-${staffName}`) ||
+        document.getElementById(`staff-timeline-column-${staffName}`);
+      const staffCard = document.getElementById(`staff-card-${staffName}`);
+      const recordElement = targetRecord?.id
+        ? document.getElementById(`record-${targetRecord.id}`)
+        : null;
+
+      if (staffColumn) {
+        // 수평 스크롤 즉각 중앙 정렬 (순간이동)
+        const horizontalContainer = staffColumn.closest(".overflow-x-auto") as HTMLElement | null;
+        if (horizontalContainer) {
+          const colLeft = staffColumn.offsetLeft;
+          const colWidth = staffColumn.offsetWidth;
+          const containerWidth = horizontalContainer.clientWidth;
+          horizontalContainer.scrollLeft = colLeft - containerWidth / 2 + colWidth / 2;
+        }
+
+        // 수직 스크롤: 직원 컬럼 최상단으로 순간이동
+        staffColumn.scrollIntoView({
+          behavior: "auto",
+          block: "start",
+          inline: "center",
+        });
+
+        // 만약 타겟 기록이 화면 아래쪽으로 벗어난 경우에만 자연스럽게 화면 안으로 포함되도록 보정
+        if (recordElement) {
+          const rect = recordElement.getBoundingClientRect();
+          if (rect.bottom > window.innerHeight) {
+            recordElement.scrollIntoView({
+              behavior: "auto",
+              block: "nearest",
+              inline: "center",
+            });
           }
         }
-      }, 50);
-    }
+      } else if (recordElement) {
+        recordElement.scrollIntoView({
+          behavior: "auto",
+          block: "nearest",
+          inline: "center",
+        });
+      } else if (staffCard) {
+        staffCard.scrollIntoView({
+          behavior: "auto",
+          block: "center",
+          inline: "center",
+        });
+      } else {
+        const attendanceSection = document.getElementById("attendance-status-section");
+        if (attendanceSection) {
+          attendanceSection.scrollIntoView({
+            behavior: "auto",
+            block: "center",
+          });
+        }
+      }
+    };
+
+    // 지연 시간(setTimeout) 없이 즉시 실행하여 순간이동 포커싱
+    instantFocus();
+    requestAnimationFrame(instantFocus);
   };
 
   const isStaffClockedIn = (staffName: string) => {
@@ -898,12 +855,18 @@ export default function App() {
     }
 
     const initialEst = distinctEsts[0] || "";
+    const choiceTimes = staffNames
+      .map((name) => activeChoices[name]?.choiceTime?.trim())
+      .filter(Boolean);
+    const initialChoiceTime = Array.from(new Set(choiceTimes)).join(", ") || "";
+
     setChoiceActionModalConfig({
       isOpen: true,
       mode: "PROGRESS",
       staffNames,
       initialEstablishmentName: initialEst,
       initialTime: format(currentTime || new Date(), "HH:mm"),
+      choiceEntryTime: initialChoiceTime,
     });
   };
 
@@ -942,12 +905,18 @@ export default function App() {
         }
 
         const initialEst = distinctEsts[0] || "";
+        const choiceTimes = staffWithChoice
+          .map((name) => activeChoices[name]?.choiceTime?.trim())
+          .filter(Boolean);
+        const initialChoiceTime = Array.from(new Set(choiceTimes)).join(", ") || "";
+
         setChoiceActionModalConfig({
           isOpen: true,
           mode: "BOUNCE",
           staffNames: staffWithChoice,
           initialEstablishmentName: initialEst,
           initialTime: format(currentTime || new Date(), "HH:mm"),
+          choiceEntryTime: initialChoiceTime,
         });
         return;
       }
@@ -1222,6 +1191,42 @@ export default function App() {
     handleBounceMultiple([staffName]);
   };
 
+  const handleCancelChoiceMultiple = async (names: string[]) => {
+    if (!names || names.length === 0) return;
+    const targetNames = names.filter(
+      (n) => !!(activeChoices[n] || activeChoices[staffRenameMap.get(n) || n]),
+    );
+    if (targetNames.length === 0) return;
+
+    const keysToRemove = new Set<string>();
+    targetNames.forEach((n) => {
+      keysToRemove.add(n);
+      const renamed = staffRenameMap.get(n);
+      if (renamed) keysToRemove.add(renamed);
+      Object.keys(rawActiveChoices).forEach((rawKey) => {
+        if (rawKey === n || staffRenameMap.get(rawKey) === n) {
+          keysToRemove.add(rawKey);
+        }
+      });
+    });
+
+    try {
+      // Optimistic update for instant UI feedback
+      setRawActiveChoices((prev) => {
+        const next = { ...prev };
+        keysToRemove.forEach((key) => {
+          delete next[key];
+        });
+        return next;
+      });
+
+      await removeActiveChoicesMultiple(selectedDate, Array.from(keysToRemove));
+    } catch (error) {
+      console.error("초이스 취소 오류:", error);
+      setAlertConfig({ message: "초이스 취소 처리 중 오류가 발생했습니다." });
+    }
+  };
+
   const handleFinishMultiple = async (staffNames: string[]) => {
     try {
       const getBusinessDateLocal = (dateStr: string, timeStr: string) => {
@@ -1483,6 +1488,8 @@ export default function App() {
     handleBounceMultiple,
     handleChoiceMultiple,
     handleProgressMultiple,
+    handleCancelChoiceMultiple,
+    activeChoices,
   );
 
   const onManualProfitClick = (staffName: string, calculatedProfit: number) => {
@@ -1519,27 +1526,7 @@ export default function App() {
     localStorage.setItem("office_status_modal", JSON.stringify(statusModal));
   }, [statusModal]);
 
-  useEffect(() => {
-    localStorage.setItem("office_is_form_open", String(isFormOpen));
-  }, [isFormOpen]);
 
-  useEffect(() => {
-    if (editingRecord) {
-      localStorage.setItem(
-        "office_editing_record",
-        JSON.stringify(editingRecord),
-      );
-    } else {
-      localStorage.removeItem("office_editing_record");
-    }
-  }, [editingRecord]);
-
-  useEffect(() => {
-    localStorage.setItem(
-      "office_pre_selected_staff",
-      JSON.stringify(preSelectedStaffNames),
-    );
-  }, [preSelectedStaffNames]);
 
   // Scroll position persistence
   useEffect(() => {
@@ -1569,10 +1556,6 @@ export default function App() {
       setInitError(`데이터 연결에 문제가 발생했습니다: ${err?.message || "알 수 없는 오류"}`);
     }
   };
-
-  useEffect(() => {
-    testConnection().catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -1726,9 +1709,7 @@ export default function App() {
     // 사용자가 탭으로 돌아왔을 때 (오랜 시간 방치 후 복귀 시) 자동 복구
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        console.log("앱으로 복귀함: 데이터 재동기화 시도");
-        testConnection().catch(() => {});
-        // 필요한 경우 강제 새로고침 대신 데이터 구독을 재시작하게 됩니다.
+        // 앱 복귀 시 실시간 연결은 Firestore 리스너가 자동 유지
       }
     };
 
@@ -1738,15 +1719,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // 앱 활성 상태 유지를 위한 주기적 핑 (30초마다)
-    // 서버가 잠들지 않도록 하고, 연결 상태를 유지합니다.
+    // 앱 활성 상태 유지를 위한 주기적 가벼운 핑 (60초마다)
     const pingServer = () => {
-      fetch("/").catch(() => {});
-      testConnection().catch(() => {});
+      fetch("/api/health").catch(() => {});
     };
 
-    pingServer();
-    const keepAlive = setInterval(pingServer, 30000);
+    const keepAlive = setInterval(pingServer, 60000);
     return () => clearInterval(keepAlive);
   }, []);
 
@@ -1846,13 +1824,15 @@ export default function App() {
       }
     });
 
-    const globalUnpaidStaffAmount = unpaidStaffRecords.reduce(
-      (sum, r) => sum + r.staffPayment,
-      0,
-    );
-    const pastUnpaidStaffAmount = unpaidStaffRecords
-      .filter((r) => r.date < selectedDate)
+    const todayUnpaidStaffAmount = records
+      .filter((r) => !r.isStaffPaid)
       .reduce((sum, r) => sum + r.staffPayment, 0);
+
+    const pastUnpaidStaffAmount = unpaidStaffRecords
+      .filter((r) => r.date < selectedDate && !r.isStaffPaid)
+      .reduce((sum, r) => sum + r.staffPayment, 0);
+
+    const globalUnpaidStaffAmount = todayUnpaidStaffAmount + pastUnpaidStaffAmount;
 
     return {
       totalRevenue,
@@ -1865,6 +1845,7 @@ export default function App() {
       paidStaffAmount,
       unpaidAmount,
       pastUnpaidAmount,
+      todayUnpaidStaffAmount,
       globalUnpaidStaffAmount,
       pastUnpaidStaffAmount,
       tableUnits: records
@@ -1975,6 +1956,152 @@ export default function App() {
       .map((s) => s.name);
   }, [records, workingStaffIds, offStaffIds, staff]);
 
+  const progressStatusData = useMemo(() => {
+    const workingStaff = staff.filter((s) => workingStaffIds.includes(s.id!));
+
+    const ongoingRecs = records.filter((r) => {
+      if (!r.startTime || !r.endTime) return false;
+      const start = r.startTime.toDate
+        ? r.startTime.toDate()
+        : new Date(r.startTime);
+      const end = r.endTime.toDate
+        ? r.endTime.toDate()
+        : new Date(r.endTime);
+      return start.getTime() === end.getTime();
+    });
+
+    const waitingStaffList: { name: string; id: string; checkInTimeStr?: string }[] = [];
+    const choiceStaffList: {
+      name: string;
+      id: string;
+      establishmentName: string;
+      choiceTime?: string;
+    }[] = [];
+    const ongoingStaffList: {
+      name: string;
+      id: string;
+      establishmentName: string;
+      startStr?: string;
+      durationText?: string;
+    }[] = [];
+    const finishedStaffList: { name: string; id: string }[] = [];
+
+    const ongoingByEstablishment: Record<
+      string,
+      {
+        count: number;
+        staffList: { name: string; durationText?: string; startStr?: string }[];
+      }
+    > = {};
+
+    const choiceByEstablishment: Record<
+      string,
+      {
+        count: number;
+        staffList: { name: string; choiceTime?: string }[];
+      }
+    > = {};
+
+    workingStaff.forEach((s) => {
+      const isFinished = offStaffIds.includes(s.id!);
+      if (isFinished) {
+        finishedStaffList.push({ name: s.name, id: s.id! });
+        return;
+      }
+
+      const ongoingRecord = ongoingRecs.find((r) => r.staffName === s.name);
+      if (ongoingRecord) {
+        const est = ongoingRecord.establishmentName?.trim() || "미정";
+        let durationText = "";
+        let startStr = "";
+        if (ongoingRecord.startTime) {
+          const ongoingStart = ongoingRecord.startTime.toDate
+            ? ongoingRecord.startTime.toDate()
+            : new Date(ongoingRecord.startTime);
+          const diffMs = currentTime.getTime() - ongoingStart.getTime();
+          const diffMins = Math.max(0, Math.floor(diffMs / 60000));
+          const fullHours = Math.floor(diffMins / 60);
+          const leftoverMins = diffMins % 60;
+          durationText = `${fullHours > 0 ? `${fullHours}시간 ` : ""}${leftoverMins}분`;
+          startStr = format(ongoingStart, "HH:mm");
+        }
+
+        ongoingStaffList.push({
+          name: s.name,
+          id: s.id!,
+          establishmentName: est,
+          startStr,
+          durationText,
+        });
+
+        if (!ongoingByEstablishment[est]) {
+          ongoingByEstablishment[est] = { count: 0, staffList: [] };
+        }
+        ongoingByEstablishment[est].count += 1;
+        ongoingByEstablishment[est].staffList.push({
+          name: s.name,
+          durationText,
+          startStr,
+        });
+        return;
+      }
+
+      const activeChoice =
+        activeChoices[s.name] ||
+        activeChoices[staffRenameMap.get(s.name) || s.name];
+      if (activeChoice) {
+        const est = activeChoice.establishmentName?.trim() || "미정";
+        choiceStaffList.push({
+          name: s.name,
+          id: s.id!,
+          establishmentName: est,
+          choiceTime: activeChoice.choiceTime,
+        });
+
+        if (!choiceByEstablishment[est]) {
+          choiceByEstablishment[est] = { count: 0, staffList: [] };
+        }
+        choiceByEstablishment[est].count += 1;
+        choiceByEstablishment[est].staffList.push({
+          name: s.name,
+          choiceTime: activeChoice.choiceTime,
+        });
+        return;
+      }
+
+      let checkInTimeStr = "";
+      if (checkInTimes[s.id!]) {
+        const t = checkInTimes[s.id!].toDate
+          ? checkInTimes[s.id!].toDate()
+          : new Date(checkInTimes[s.id!]);
+        checkInTimeStr = format(t, "HH:mm");
+      }
+      waitingStaffList.push({
+        name: s.name,
+        id: s.id!,
+        checkInTimeStr,
+      });
+    });
+
+    return {
+      waitingStaffList,
+      choiceStaffList,
+      ongoingStaffList,
+      finishedStaffList,
+      ongoingByEstablishment,
+      choiceByEstablishment,
+    };
+  }, [
+    staff,
+    workingStaffIds,
+    offStaffIds,
+    records,
+    activeChoices,
+    staffRenameMap,
+    currentTime,
+    checkInTimes,
+  ]);
+
   const handleToggleOff = async (staffId: string, e?: React.MouseEvent) => {
     if (e) {
       (e.currentTarget as HTMLElement).blur();
@@ -2013,28 +2140,7 @@ export default function App() {
     }
   };
 
-  const handleToggleAttendance = async (
-    staffId: string,
-    e?: React.MouseEvent,
-  ) => {
-    if (e) {
-      (e.currentTarget as HTMLElement).blur();
-      e.preventDefault();
-      e.stopPropagation();
-    }
-    const isWorking = workingStaffIds.includes(staffId);
-    if (isWorking) {
-      const staffMember = staff.find((s) => s.id === staffId);
-      const hasDispatchRecords = staffMember
-        ? records.some((r) => r.staffName === staffMember.name)
-        : false;
-      if (hasDispatchRecords) {
-        setAlertConfig({
-          message: `${staffMember?.name || "해당 직원"}은(는) 근무기록이 남아 있어 출근을 해제할 수 없습니다. 기록을 먼저 삭제해주세요.`,
-        });
-        return;
-      }
-    }
+  const executeToggleAttendance = async (staffId: string, isWorking: boolean) => {
     const newIds = isWorking
       ? workingStaffIds.filter((id) => id !== staffId)
       : [...workingStaffIds, staffId];
@@ -2068,40 +2174,38 @@ export default function App() {
     }
   };
 
+  const handleToggleAttendance = async (
+    staffId: string,
+    e?: React.MouseEvent,
+  ) => {
+    if (e) {
+      (e.currentTarget as HTMLElement).blur();
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    const isWorking = workingStaffIds.includes(staffId);
+
+    // 근무기록이 있는 직원은 출근 해제 불가 (기록만 남고 출근이 빠지면 정산/수금 계산이 어긋남)
+    if (isWorking) {
+      const staffMember = staff.find((s) => s.id === staffId);
+      const hasDispatchRecords = staffMember
+        ? records.some((r) => r.staffName === staffMember.name)
+        : false;
+      if (hasDispatchRecords) {
+        setAlertConfig({
+          message: `${staffMember?.name || "해당 직원"}은(는) 근무기록이 남아 있어 출근을 해제할 수 없습니다. 기록을 먼저 삭제해주세요.`,
+        });
+        return;
+      }
+    }
+
+    await executeToggleAttendance(staffId, isWorking);
+  };
+
   // Move early returns here to ensure all hooks are called in the same order
   return (
     <AnimatePresence mode="wait">
-      {loading && isAuthenticated && records.length === 0 && showLoadingUI ? (
-        <motion.div
-          key="loading"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.3 }}
-          className="min-h-screen bg-stone-50 flex flex-col items-center justify-center p-6 text-center"
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="flex flex-col items-center"
-          >
-            <div className="w-16 h-16 bg-stone-900 rounded-2xl flex items-center justify-center mb-6 animate-pulse">
-              <Building2 className="text-white w-8 h-8" />
-            </div>
-            <h2 className="text-xl font-black text-stone-900 mb-2">
-              세션 복구 중...
-            </h2>
-            <p className="text-stone-500 text-sm font-bold">
-              이전 작업 위치를 찾고 있습니다.
-            </p>
-            <div className="mt-8 flex gap-1">
-              <div className="w-1.5 h-1.5 bg-stone-300 rounded-full animate-bounce [animation-delay:-0.3s]" />
-              <div className="w-1.5 h-1.5 bg-stone-300 rounded-full animate-bounce [animation-delay:-0.15s]" />
-              <div className="w-1.5 h-1.5 bg-stone-300 rounded-full animate-bounce" />
-            </div>
-          </motion.div>
-        </motion.div>
-      ) : initError ? (
+      {initError ? (
         <motion.div
           key="error"
           initial={{ opacity: 0 }}
@@ -2257,22 +2361,17 @@ export default function App() {
           </motion.div>
         </motion.div>
       ) : (
-        <motion.div
-          key="main"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.4 }}
-        >
+        <div key="main">
           <ErrorBoundary>
-            <div className="min-h-screen bg-stone-50 text-stone-900 font-sans w-full max-w-full overflow-x-hidden relative">
-              {/* Header */}
-              <header className="bg-white border-bottom border-stone-200 sticky top-0 z-10 w-full max-w-full overflow-x-hidden">
-                <div className="max-w-5xl mx-auto px-2.5 sm:px-4 h-16 flex items-center justify-between w-full">
-                  <div className="flex items-center gap-2">
+            <div className="min-h-screen bg-stone-50 text-stone-900 font-sans w-full max-w-full overflow-x-clip relative">
+              {/* Header - Fixed to top of viewport like Excel freeze panes */}
+              <header className="fixed top-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-md border-b border-stone-200 shadow-xs w-full">
+                <div className="max-w-5xl mx-auto px-1.5 sm:px-4 h-14 sm:h-16 flex items-center justify-between w-full gap-1">
+                  <div className="flex items-center gap-1 sm:gap-2 shrink-0">
                     <button
                       onClick={handleInstallClick}
                       className={cn(
-                        "w-8 h-8 rounded-lg flex items-center justify-center transition-all active:scale-90",
+                        "w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center transition-all active:scale-90 shrink-0",
                         showInstallBtn
                           ? "bg-indigo-600 shadow-lg shadow-indigo-200 animate-pulse"
                           : "bg-stone-900",
@@ -2283,22 +2382,22 @@ export default function App() {
                           : "정산프로그램"
                       }
                     >
-                      <Building2 className="text-white w-5 h-5" />
+                      <Building2 className="text-white w-4 h-4 sm:w-5 sm:h-5" />
                     </button>
-                    <span className="font-bold text-lg hidden sm:inline">
+                    <span className="font-bold text-base sm:text-lg hidden md:inline">
                       정산 프로그램
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2 sm:gap-4">
+                  <div className="flex items-center gap-1 sm:gap-2 shrink-0">
                     <button
                       onClick={() => setIsStaffModalOpen(true)}
-                      className="p-2 text-stone-400 hover:text-stone-900 transition-colors bg-stone-100 rounded-lg shrink-0"
+                      className="p-1.5 sm:p-2 text-stone-500 hover:text-stone-900 transition-colors bg-stone-100 rounded-lg shrink-0"
                       title="직원 관리"
                     >
                       <Users className="w-4 h-4 sm:w-5 sm:h-5" />
                     </button>
-                    <div className="flex items-center bg-stone-100 p-1 rounded-xl shrink-0 gap-1">
+                    <div className="flex items-center bg-stone-100 p-0.5 sm:p-1 rounded-xl shrink-0 gap-0 sm:gap-0.5 border border-stone-200/60">
                       <button
                         type="button"
                         onClick={(e) => {
@@ -2307,10 +2406,11 @@ export default function App() {
                           const prev = subDays(parseISO(selectedDate), 1);
                           setSelectedDate(format(prev, "yyyy-MM-dd"));
                         }}
-                        className="relative z-40 p-3 sm:p-1.5 text-stone-600 hover:text-stone-900 bg-white sm:bg-transparent shadow-sm sm:shadow-none rounded-lg transition-all active:scale-90 flex items-center justify-center"
+                        className="relative z-40 p-1 sm:p-1.5 text-stone-600 hover:text-stone-900 bg-white sm:bg-transparent shadow-2xs sm:shadow-none rounded-lg transition-all active:scale-90 flex items-center justify-center"
                         style={{ touchAction: "manipulation" }}
+                        title="이전 날짜"
                       >
-                        <ChevronLeft className="w-5 h-5 sm:w-4 sm:h-4" />
+                        <ChevronLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                       </button>
 
                       <div
@@ -2329,17 +2429,20 @@ export default function App() {
                             dateInputRef.current?.click();
                           }
                         }}
-                        className="relative z-10 flex items-center gap-1.5 px-3 py-1.5 hover:bg-white rounded-lg transition-all cursor-pointer active:bg-white/50"
+                        className="relative z-10 flex items-center gap-1 px-1.5 sm:px-2.5 py-1 sm:py-1.5 hover:bg-white rounded-lg transition-all cursor-pointer active:bg-white/50 shrink-0"
+                        title="날짜 선택"
                       >
-                        <Calendar className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-stone-500" />
-                        <span className="text-[13px] sm:text-[13px] font-bold text-stone-900 whitespace-nowrap">
-                          {format(parseISO(selectedDate), "MM-dd", {
-                            locale: ko,
-                          })}
-                          <span className="hidden sm:inline">
-                            {format(parseISO(selectedDate), " (eee)", {
+                        <Calendar className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-stone-500 shrink-0" />
+                        <span className="text-[11.5px] sm:text-[13px] font-black text-stone-900 whitespace-nowrap inline-flex items-center shrink-0">
+                          <span>
+                            {format(parseISO(selectedDate), "MM.dd", {
                               locale: ko,
                             })}
+                          </span>
+                          <span className="ml-0.5 text-indigo-700 font-black">
+                            ({format(parseISO(selectedDate), "eee", {
+                              locale: ko,
+                            })})
                           </span>
                         </span>
                         <input
@@ -2364,10 +2467,11 @@ export default function App() {
                           const next = addDays(parseISO(selectedDate), 1);
                           setSelectedDate(format(next, "yyyy-MM-dd"));
                         }}
-                        className="relative z-40 p-3 sm:p-1.5 text-stone-600 hover:text-stone-900 bg-white sm:bg-transparent shadow-sm sm:shadow-none rounded-lg transition-all active:scale-90 flex items-center justify-center"
+                        className="relative z-40 p-1 sm:p-1.5 text-stone-600 hover:text-stone-900 bg-white sm:bg-transparent shadow-2xs sm:shadow-none rounded-lg transition-all active:scale-90 flex items-center justify-center"
                         style={{ touchAction: "manipulation" }}
+                        title="다음 날짜"
                       >
-                        <ChevronRight className="w-5 h-5 sm:w-4 sm:h-4" />
+                        <ChevronRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                       </button>
                     </div>
 
@@ -2381,14 +2485,15 @@ export default function App() {
                             : format(now, "yyyy-MM-dd"),
                         );
                       }}
-                      className="px-4 py-2.5 bg-stone-900 text-white text-[12px] font-bold rounded-xl hover:bg-stone-800 transition-all active:scale-95 shadow-md shrink-0 z-40"
+                      className="px-2 sm:px-3.5 py-1 sm:py-2 bg-stone-900 text-white text-[10.5px] sm:text-[12px] font-bold rounded-lg sm:rounded-xl hover:bg-stone-800 transition-all active:scale-95 shadow-2xs shrink-0 z-40 whitespace-nowrap"
                       style={{ touchAction: "manipulation" }}
                     >
                       오늘
                     </button>
                     <button
                       onClick={handleLogout}
-                      className="p-1.5 sm:p-2 text-stone-400 hover:text-stone-900 transition-colors shrink-0"
+                      className="p-1 sm:p-1.5 text-stone-400 hover:text-stone-900 transition-colors shrink-0"
+                      title="로그아웃"
                     >
                       <LogOut className="w-4 h-4 sm:w-5 sm:h-5" />
                     </button>
@@ -2396,7 +2501,10 @@ export default function App() {
                 </div>
               </header>
 
-              <main className="max-w-5xl mx-auto px-2.5 sm:px-4 py-4 sm:py-8 w-full max-w-full overflow-x-hidden">
+              {/* Fixed header height spacer so content starts directly below it without jump */}
+              <div className="h-14 sm:h-16 w-full shrink-0 pointer-events-none" aria-hidden="true" />
+
+              <main className="max-w-5xl mx-auto px-2.5 sm:px-4 py-4 sm:py-8 w-full max-w-full overflow-x-clip">
                 {/* Dashboard Stats */}
                 {loading && (
                   <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-stone-900 text-white px-4 py-2 rounded-full text-xs font-bold shadow-lg flex flex-col items-center gap-2 animate-bounce">
@@ -2493,24 +2601,26 @@ export default function App() {
                     }
                     displayValue={
                       <div className="flex flex-col gap-1 mt-1">
-                        {(stats.globalUnpaidStaffAmount > 0 ||
+                        {(stats.todayUnpaidStaffAmount > 0 ||
                           stats.pastUnpaidStaffAmount > 0) && (
                           <div className="flex items-center gap-1 bg-red-50 text-red-600 px-1.5 py-0.5 rounded-lg border border-red-100/50 w-full mb-0.5 whitespace-nowrap overflow-x-auto overflow-y-hidden hide-scrollbar">
-                            {stats.globalUnpaidStaffAmount > 0 && (
+                            {stats.todayUnpaidStaffAmount > 0 && (
                               <div className="flex items-center gap-0.5 shrink-0">
                                 <span className="text-[9px] font-black tracking-tighter">
-                                  총미지급
+                                  당일미지급
                                 </span>
                                 <span className="text-[11px] font-black">
                                   {(
-                                    stats.globalUnpaidStaffAmount / 10000
+                                    stats.todayUnpaidStaffAmount / 10000
                                   ).toFixed(1)}
                                   만
                                 </span>
                               </div>
                             )}
                             {stats.pastUnpaidStaffAmount > 0 && (
-                              <div className="flex items-center gap-0.5 ml-1 pl-1 border-l border-red-200/60 opacity-90 shrink-0">
+                              <div
+                                className={`flex items-center gap-0.5 shrink-0 opacity-90 ${stats.todayUnpaidStaffAmount > 0 ? "ml-1 pl-1 border-l border-red-200/60" : ""}`}
+                              >
                                 <span className="text-[9px] font-bold tracking-tighter">
                                   지난미지급
                                 </span>
@@ -2898,14 +3008,33 @@ export default function App() {
                       ),
                     };
 
-                    const overallAffCounts: Record<string, { count: number; names: string[] }> = {};
+                    const overallAffCounts: Record<
+                      string,
+                      {
+                        total: number;
+                        off: number;
+                        remaining: number;
+                        names: string[];
+                      }
+                    > = {};
                     todayWorkingStaff.forEach((s) => {
                       const { affiliation } = formatStaffNameComponents(s.name);
                       if (affiliation) {
                         if (!overallAffCounts[affiliation]) {
-                          overallAffCounts[affiliation] = { count: 0, names: [] };
+                          overallAffCounts[affiliation] = {
+                            total: 0,
+                            off: 0,
+                            remaining: 0,
+                            names: [],
+                          };
                         }
-                        overallAffCounts[affiliation].count += 1;
+                        const isOff = offStaffIds.includes(s.id!);
+                        overallAffCounts[affiliation].total += 1;
+                        if (isOff) {
+                          overallAffCounts[affiliation].off += 1;
+                        } else {
+                          overallAffCounts[affiliation].remaining += 1;
+                        }
                         overallAffCounts[affiliation].names.push(s.name);
                       }
                     });
@@ -2913,29 +3042,66 @@ export default function App() {
                     return (
                       <div className="space-y-4">
                         {Object.keys(overallAffCounts).length > 0 && (
-                          <div className="bg-stone-50 border border-stone-200/80 rounded-2xl p-3 shadow-2xs">
+                          <div className="bg-stone-50 border border-stone-200/80 rounded-2xl p-2.5 sm:p-3 shadow-2xs">
                             <div className="flex items-center justify-between mb-2 px-1">
                               <span className="text-[11px] font-black text-stone-600 uppercase tracking-wider flex items-center gap-1.5">
                                 <Camera className="w-3.5 h-3.5 text-stone-800" />
                                 소속별 묶음 캡쳐 공유 (뱃지 클릭시 캡쳐)
                               </span>
                             </div>
-                            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar flex-wrap">
-                              {Object.entries(overallAffCounts).map(([aff, data]) => (
-                                <button
-                                  key={`overall-aff-${aff}`}
-                                  type="button"
-                                  onClick={() => handleGroupCapture(aff, data.names)}
-                                  className={cn(
-                                    "px-2.5 py-1 rounded-lg text-xs font-black text-white shrink-0 flex items-center gap-1 shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer",
-                                    aff === "직속" ? "bg-amber-500 hover:bg-amber-600" : "bg-purple-600 hover:bg-purple-700"
-                                  )}
-                                  title={`${aff} 소속 직원 (${data.count}명) 업무내역 묶음 캡쳐 공유`}
-                                >
-                                  <Camera className="w-3 h-3 opacity-90" />
-                                  <span>{aff} {data.count}명</span>
-                                </button>
-                              ))}
+                            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5">
+                              {Object.entries(overallAffCounts).map(([aff, data]) => {
+                                const isAllOff = data.remaining === 0;
+                                return (
+                                  <button
+                                    key={`overall-aff-${aff}`}
+                                    type="button"
+                                    onClick={() => handleGroupCapture(aff, data.names)}
+                                    className={cn(
+                                      "w-full sm:w-auto px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-xl text-white shrink-0 flex items-center justify-between sm:justify-start gap-1 sm:gap-2 shadow-xs active:scale-95 transition-all cursor-pointer text-left leading-none",
+                                      isAllOff
+                                        ? "bg-stone-400 hover:bg-stone-500 opacity-90"
+                                        : aff === "직속"
+                                          ? "bg-amber-500 hover:bg-amber-600 hover:opacity-95"
+                                          : "bg-purple-600 hover:bg-purple-700 hover:opacity-95"
+                                    )}
+                                    title={`${aff} 소속: 출근 ${data.total}명 중 ${data.off}명 퇴근 (현재 ${data.remaining}명 남음)${isAllOff ? " [전원 퇴근]" : ""} - 클릭 시 묶음 캡쳐`}
+                                  >
+                                    <div className="flex items-center gap-1 sm:gap-1.5 min-w-0">
+                                      <Camera className="w-3 h-3 sm:w-3.5 sm:h-3.5 opacity-90 shrink-0" />
+                                      {/* 소속: 위아래 두 줄 크기 */}
+                                      <span className="font-black text-xs sm:text-sm tracking-tight leading-none truncate">
+                                        {aff}
+                                      </span>
+
+                                      {/* 인원수: 위아래 두 줄 크기 박스 */}
+                                      <span
+                                        className={cn(
+                                          "border px-1 py-0.5 sm:px-1.5 sm:py-1 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-black leading-none shadow-2xs shrink-0 flex items-center justify-center",
+                                          isAllOff ? "bg-black/20 border-white/20 text-white" : "bg-black/25 border-white/20 text-white"
+                                        )}
+                                      >
+                                        {data.remaining}명
+                                      </span>
+                                    </div>
+
+                                    {/* 출근 / 퇴근: 위아래 2줄 (각 1줄 크기) */}
+                                    <div className="flex flex-col text-[8.5px] sm:text-[10px] leading-tight justify-center shrink-0 text-right sm:text-left pl-0.5">
+                                      <span className="font-black text-white whitespace-nowrap">
+                                        출근 {data.total}
+                                      </span>
+                                      <span
+                                        className={cn(
+                                          "font-bold whitespace-nowrap",
+                                          isAllOff ? "text-white/90" : "text-white/85"
+                                        )}
+                                      >
+                                        퇴근 {data.off}
+                                      </span>
+                                    </div>
+                                  </button>
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -2957,54 +3123,112 @@ export default function App() {
                                   ? "text-blue-700 bg-blue-100"
                                   : "text-purple-700 bg-purple-100";
 
+                            const groupOffCount = list.filter((s) => offStaffIds.includes(s.id!)).length;
+                            const groupRemainingCount = list.length - groupOffCount;
+
                             return (
                               <div key={group} className="space-y-2">
                                 <div className="flex items-center gap-1.5 flex-wrap">
+                                  {/* Group overall capture badge */}
                                   <button
                                     type="button"
                                     onClick={() => handleGroupCapture(groupLabel, list.map((s) => s.name))}
                                     className={cn(
-                                      "text-[11px] font-black px-2 py-0.5 inline-flex items-center gap-1 rounded-md uppercase tracking-wider hover:opacity-85 transition-all cursor-pointer active:scale-95 shadow-2xs",
-                                      groupColor,
+                                      "px-2 sm:px-2.5 py-1 sm:py-1.5 inline-flex items-center gap-1.5 sm:gap-2 rounded-xl uppercase tracking-wider hover:opacity-85 transition-all cursor-pointer active:scale-95 shadow-2xs text-left leading-none",
+                                      groupRemainingCount === 0
+                                        ? "text-stone-500 bg-stone-200 border border-stone-300/80"
+                                        : groupColor,
                                     )}
-                                    title={`${groupLabel} 소속 전체 직원 (${list.length}명) 묶음 캡쳐 공유`}
+                                    title={`${groupLabel} 소속: 출근 ${list.length}명 중 ${groupOffCount}명 퇴근 (현재 ${groupRemainingCount}명 남음)${groupRemainingCount === 0 ? " [전원 퇴근]" : ""} - 묶음 캡쳐`}
                                   >
-                                    <Camera className="w-3 h-3 opacity-80" />
-                                    <span>
-                                      {groupLabel} {list.length}명
+                                    <Camera className="w-3 h-3 sm:w-3.5 sm:h-3.5 opacity-80 shrink-0" />
+                                    <span className="font-black text-xs sm:text-sm tracking-tight leading-none shrink-0">
+                                      {groupLabel}
                                     </span>
+                                    <span
+                                      className={cn(
+                                        "border px-1 py-0.5 sm:px-1.5 sm:py-1 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-black leading-none shadow-2xs shrink-0 flex items-center justify-center",
+                                        groupRemainingCount === 0
+                                          ? "bg-black/10 border-stone-300 text-stone-600"
+                                          : "bg-black/15 border-black/10 text-inherit"
+                                      )}
+                                    >
+                                      {groupRemainingCount}명
+                                    </span>
+                                    <div className="flex flex-col text-[8.5px] sm:text-[10px] leading-tight justify-center shrink-0">
+                                      <span className="font-black whitespace-nowrap">
+                                        출근 {list.length}
+                                      </span>
+                                      <span className="font-bold opacity-80 whitespace-nowrap">
+                                        퇴근 {groupOffCount}
+                                      </span>
+                                    </div>
                                   </button>
                                   {(() => {
-                                    const affCounts: Record<string, { count: number; names: string[] }> = {};
+                                    const affCounts: Record<
+                                      string,
+                                      {
+                                        total: number;
+                                        off: number;
+                                        remaining: number;
+                                        names: string[];
+                                      }
+                                    > = {};
                                     list.forEach((s) => {
                                       const { affiliation } = formatStaffNameComponents(s.name);
                                       if (affiliation) {
                                         if (!affCounts[affiliation]) {
-                                          affCounts[affiliation] = { count: 0, names: [] };
+                                          affCounts[affiliation] = {
+                                            total: 0,
+                                            off: 0,
+                                            remaining: 0,
+                                            names: [],
+                                          };
                                         }
-                                        affCounts[affiliation].count += 1;
+                                        const isOff = offStaffIds.includes(s.id!);
+                                        affCounts[affiliation].total += 1;
+                                        if (isOff) {
+                                          affCounts[affiliation].off += 1;
+                                        } else {
+                                          affCounts[affiliation].remaining += 1;
+                                        }
                                         affCounts[affiliation].names.push(s.name);
                                       }
                                     });
                                     const entries = Object.entries(affCounts);
                                     if (entries.length === 0) return null;
-                                    return entries.map(([aff, data]) => (
-                                      <button
-                                        key={aff}
-                                        type="button"
-                                        onClick={() => handleGroupCapture(aff, data.names)}
-                                        className={cn(
-                                          "px-1.5 py-0.5 rounded text-[10px] font-extrabold leading-none shadow-2xs text-white hover:opacity-90 transition-all cursor-pointer active:scale-95 flex items-center gap-1",
-                                          aff === "직속" ? "bg-amber-500 hover:bg-amber-600" : "bg-purple-600 hover:bg-purple-700"
-                                        )}
-                                        title={`${aff} 소속 직원 (${data.count}명) 묶음 캡쳐 공유`}
-                                      >
-                                        <Camera className="w-2.5 h-2.5 opacity-90" />
-                                        <span>
-                                          {aff} {data.count}명
-                                        </span>
-                                      </button>
-                                    ));
+                                    return entries.map(([aff, data]) => {
+                                      const isAllOff = data.remaining === 0;
+                                      return (
+                                        <button
+                                          key={aff}
+                                          type="button"
+                                          onClick={() => handleGroupCapture(aff, data.names)}
+                                          className={cn(
+                                            "px-2 py-1 rounded-xl text-white active:scale-95 flex items-center gap-1.5 text-left shadow-2xs leading-none transition-all cursor-pointer",
+                                            isAllOff
+                                              ? "bg-stone-400 hover:bg-stone-500 opacity-90"
+                                              : aff === "직속"
+                                                ? "bg-amber-500 hover:bg-amber-600 hover:opacity-95"
+                                                : "bg-purple-600 hover:bg-purple-700 hover:opacity-95"
+                                          )}
+                                          title={`${aff} 소속: 출근 ${data.total}명 중 ${data.off}명 퇴근 (현재 ${data.remaining}명 남음)${isAllOff ? " [전원 퇴근]" : ""} - 묶음 캡쳐`}
+                                        >
+                                          <Camera className="w-3 h-3 opacity-90 shrink-0" />
+                                          <span className="font-black text-xs tracking-tight leading-none shrink-0">
+                                            {aff}
+                                          </span>
+                                          <span
+                                            className={cn(
+                                              "border px-1.5 py-0.5 rounded-md text-[11px] font-black leading-none shadow-2xs shrink-0 flex items-center justify-center",
+                                              isAllOff ? "bg-black/20 border-white/20 text-white" : "bg-black/25 border-white/20 text-white"
+                                            )}
+                                          >
+                                            {data.remaining}명
+                                          </span>
+                                        </button>
+                                      );
+                                    });
                                   })()}
                                 </div>
                                 <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 2xl:grid-cols-9 gap-1.5 sm:gap-2.5 p-1 sm:p-2">
@@ -3083,7 +3307,7 @@ export default function App() {
                                         className={cn(
                                           "px-1 py-1 sm:py-1.5 sm:px-2 rounded-xl border-2 flex flex-col items-center justify-center text-center relative transition-all active:scale-95 active:bg-stone-50 select-none overflow-hidden min-w-0",
                                           highlightedStaffColumn === s.name &&
-                                            "border-4 border-yellow-400 bg-yellow-100/95 shadow-[0_0_20px_rgba(250,204,21,0.95)] scale-105 z-30 animate-pulse text-stone-900 font-black",
+                                            "ring-4 ring-red-500 shadow-[0_0_15px_rgba(239,68,68,0.6)] z-30 animate-pulse",
                                           multiSelected.includes(s.name) &&
                                             "ring-2 ring-blue-500 border-blue-500 bg-blue-50/50 shadow-md transform scale-[1.02]",
                                           !multiSelected.includes(s.name) &&
@@ -3241,6 +3465,273 @@ export default function App() {
                   })()}
                 </div>
 
+                {/* Live Progress Status Section (진행현황) */}
+                <div
+                  id="progress-status-section"
+                  className="mb-6 bg-white border border-stone-200 rounded-2xl p-3.5 sm:p-5 shadow-sm scroll-mt-20 relative"
+                >
+                  {/* Header & Overview Summary Badges */}
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 border-b border-stone-100 pb-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="bg-emerald-600 rounded-lg p-1.5 shrink-0 shadow-2xs">
+                        <Activity className="w-4 h-4 text-white" />
+                      </div>
+                      <h2 className="text-lg font-bold text-stone-900 tracking-tight shrink-0 mr-1">
+                        진행 현황
+                      </h2>
+
+                      {/* Status Badges Group */}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {/* 대기 뱃지 */}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setStatusModal({ type: "WAITING", isOpen: true })
+                          }
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 active:scale-95 transition-all cursor-pointer shadow-2xs"
+                          title="대기 명단 확인"
+                        >
+                          <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                          <span className="text-xs font-black">대기</span>
+                          <span className="bg-rose-600 text-white text-[11px] font-black px-1.5 py-0.2 rounded-md">
+                            {progressStatusData.waitingStaffList.length}명
+                          </span>
+                        </button>
+
+                        {/* 초이스 뱃지 */}
+                        <div
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-purple-50 border border-purple-200 text-purple-700 shadow-2xs"
+                          title="현재 초이스 진행 중"
+                        >
+                          <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
+                          <span className="text-xs font-black">초이스</span>
+                          <span className="bg-purple-600 text-white text-[11px] font-black px-1.5 py-0.2 rounded-md">
+                            {progressStatusData.choiceStaffList.length}명
+                          </span>
+                        </div>
+
+                        {/* 진행중 뱃지 */}
+                        <div
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 shadow-2xs"
+                          title="현재 업소 진행 중"
+                        >
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                          <span className="text-xs font-black">진행중</span>
+                          <span className="bg-emerald-600 text-white text-[11px] font-black px-1.5 py-0.2 rounded-md">
+                            {progressStatusData.ongoingStaffList.length}명
+                          </span>
+                        </div>
+
+                        {/* 퇴근 뱃지 */}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setStatusModal({ type: "FINISHED", isOpen: true })
+                          }
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-stone-50 border border-stone-200 text-stone-600 hover:bg-stone-100 active:scale-95 transition-all cursor-pointer shadow-2xs"
+                          title="퇴근 명단 확인"
+                        >
+                          <span className="text-xs font-black">퇴근</span>
+                          <span className="bg-stone-500 text-white text-[11px] font-black px-1.5 py-0.2 rounded-md">
+                            {progressStatusData.finishedStaffList.length}명
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <span className="text-[11px] font-semibold text-stone-500 flex items-center gap-1 self-start sm:self-auto">
+                      <Clock className="w-3 h-3 text-stone-400" />
+                      실시간 상황 요약
+                    </span>
+                  </div>
+
+                  {/* Body Content */}
+                  <div className="space-y-3.5">
+                    {/* 1. 업소별 진행중 섹션 (어떤가게에 몇명 진행중) */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-black text-stone-700 flex items-center gap-1.5">
+                          <Building2 className="w-3.5 h-3.5 text-emerald-600" />
+                          업소별 진행중 (
+                          {Object.keys(progressStatusData.ongoingByEstablishment).length}개 업소 ·{" "}
+                          {progressStatusData.ongoingStaffList.length}명)
+                        </span>
+                      </div>
+
+                      {Object.keys(progressStatusData.ongoingByEstablishment).length === 0 ? (
+                        <div className="text-stone-400 text-xs py-3 text-center bg-stone-50/70 rounded-xl border border-dashed border-stone-200">
+                          현재 업소에서 진행 중인 파견이 없습니다.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                          {Object.entries(progressStatusData.ongoingByEstablishment).map(
+                            ([estName, info]) => (
+                              <div
+                                key={`ongoing-est-${estName}`}
+                                className="bg-emerald-50/90 border border-emerald-200 rounded-xl p-2.5 shadow-2xs hover:border-emerald-300 transition-all flex flex-col gap-1.5"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                                    <span className="font-black text-xs sm:text-sm text-emerald-950 truncate">
+                                      {estName}
+                                    </span>
+                                  </div>
+                                  <span className="bg-emerald-600 text-white font-black text-xs px-2 py-0.5 rounded-md shadow-2xs shrink-0">
+                                    {info.count}명
+                                  </span>
+                                </div>
+
+                                {/* Staff list chips */}
+                                <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                                  {info.staffList.map((st) => {
+                                    const p = formatStaffNameComponents(st.name);
+                                    return (
+                                      <button
+                                        key={st.name}
+                                        type="button"
+                                        onClick={() => handleFocusStaff(st.name)}
+                                        className="hover:underline font-bold bg-white/95 border border-emerald-200/90 text-emerald-950 px-1.5 py-0.5 rounded text-[10.5px] cursor-pointer active:scale-95 transition-all flex items-center gap-1 shadow-2xs"
+                                        title={`${st.name} (${st.durationText ? `${st.durationText} 진행중` : "진행중"}) - 클릭 시 직원 위치로 이동`}
+                                      >
+                                        <span>{p.main4}</span>
+                                        <span
+                                          className={cn(
+                                            "px-1 py-0.2 rounded text-[7.5px] font-black text-white shrink-0 leading-none",
+                                            p.isDirect ? "bg-amber-500" : "bg-purple-600"
+                                          )}
+                                        >
+                                          {p.affiliation}
+                                        </span>
+                                        {st.durationText && (
+                                          <span className="text-[9px] text-emerald-700 font-normal">
+                                            ({st.durationText})
+                                          </span>
+                                        )}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ),
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 2. 업소별 초이스중 섹션 (초이스가 있을 경우) */}
+                    {Object.keys(progressStatusData.choiceByEstablishment).length > 0 && (
+                      <div className="pt-2.5 border-t border-stone-100">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-black text-stone-700 flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                            업소별 초이스중 (
+                            {Object.keys(progressStatusData.choiceByEstablishment).length}개 업소 ·{" "}
+                            {progressStatusData.choiceStaffList.length}명)
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                          {Object.entries(progressStatusData.choiceByEstablishment).map(
+                            ([estName, info]) => (
+                              <div
+                                key={`choice-est-${estName}`}
+                                className="bg-purple-50/90 border border-purple-200 rounded-xl p-2.5 shadow-2xs hover:border-purple-300 transition-all flex flex-col gap-1.5"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse shrink-0" />
+                                    <span className="font-black text-xs sm:text-sm text-purple-950 truncate">
+                                      {estName}
+                                    </span>
+                                  </div>
+                                  <span className="bg-purple-600 text-white font-black text-xs px-2 py-0.5 rounded-md shadow-2xs shrink-0">
+                                    초이스 {info.count}명
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                                  {info.staffList.map((st) => {
+                                    const p = formatStaffNameComponents(st.name);
+                                    return (
+                                      <button
+                                        key={st.name}
+                                        type="button"
+                                        onClick={() => handleFocusStaff(st.name)}
+                                        className="hover:underline font-bold bg-white/95 border border-purple-200/90 text-purple-950 px-1.5 py-0.5 rounded text-[10.5px] cursor-pointer active:scale-95 transition-all flex items-center gap-1 shadow-2xs"
+                                        title={`${st.name} (${st.choiceTime ? `${st.choiceTime} 초이스` : "초이스중"}) - 클릭 시 직원 위치로 이동`}
+                                      >
+                                        <span>{p.main4}</span>
+                                        <span
+                                          className={cn(
+                                            "px-1 py-0.2 rounded text-[7.5px] font-black text-white shrink-0 leading-none",
+                                            p.isDirect ? "bg-amber-500" : "bg-purple-600"
+                                          )}
+                                        >
+                                          {p.affiliation}
+                                        </span>
+                                        {st.choiceTime && (
+                                          <span className="text-[9px] text-purple-700 font-normal">
+                                            ({st.choiceTime})
+                                          </span>
+                                        )}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ),
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 3. 대기 직원 현황 섹션 */}
+                    <div className="pt-2.5 border-t border-stone-100">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-black text-stone-700 flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-rose-600" />
+                          대기 직원 현황 ({progressStatusData.waitingStaffList.length}명)
+                        </span>
+                      </div>
+                      {progressStatusData.waitingStaffList.length === 0 ? (
+                        <div className="text-stone-400 text-xs py-2 text-center bg-stone-50/70 rounded-xl border border-dashed border-stone-200">
+                          현재 대기 중인 직원이 없습니다.
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {progressStatusData.waitingStaffList.map((st) => {
+                            const p = formatStaffNameComponents(st.name);
+                            return (
+                              <button
+                                key={`waiting-${st.name}`}
+                                type="button"
+                                onClick={() => handleFocusStaff(st.name)}
+                                className="bg-rose-50/90 border border-rose-200/90 hover:bg-rose-100 text-rose-900 font-bold px-2 py-1 rounded-lg text-xs transition-all cursor-pointer active:scale-95 flex items-center gap-1 shadow-2xs"
+                                title={`${st.name} (대기) - 클릭 시 직원 카드로 이동`}
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
+                                <span>{p.main4}</span>
+                                <span
+                                  className={cn(
+                                    "px-1 py-0.2 rounded text-[7.5px] font-black text-white shrink-0 leading-none",
+                                    p.isDirect ? "bg-amber-500" : "bg-purple-600"
+                                  )}
+                                >
+                                  {p.affiliation}
+                                </span>
+                                {st.checkInTimeStr && (
+                                  <span className="text-[10px] text-rose-600/80 font-mono">
+                                    ({st.checkInTimeStr})
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
                 {/* Actions */}
                 <div className="flex flex-col gap-4 mb-6">
                   <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
@@ -3250,14 +3741,18 @@ export default function App() {
                           <History className="w-5 h-5" />
                         ) : viewMode === "settlement" ? (
                           <Wallet className="w-5 h-5 text-indigo-600" />
-                        ) : (
+                        ) : viewMode === "unpaid" ? (
                           <AlertCircle className="w-5 h-5 text-red-600" />
+                        ) : (
+                          <BarChart3 className="w-5 h-5 text-violet-600" />
                         )}
                         {viewMode === "list"
                           ? "파견 기록"
                           : viewMode === "settlement"
                             ? "소속별 정산"
-                            : "총 미수금 상세"}
+                            : viewMode === "unpaid"
+                              ? "총 미수금 상세"
+                              : "직원 통계"}
                       </h2>
                       <div className="flex bg-stone-200 p-1 rounded-xl">
                         <button
@@ -3305,6 +3800,18 @@ export default function App() {
                             </span>
                           )}
                         </button>
+                        <button
+                          onClick={() => setViewMode("stats")}
+                          className={cn(
+                            "px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5",
+                            viewMode === "stats"
+                              ? "bg-violet-600 shadow-sm text-white"
+                              : "text-stone-500 hover:text-stone-700",
+                          )}
+                        >
+                          <BarChart3 className="w-3.5 h-3.5" />
+                          <span>통계</span>
+                        </button>
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 w-full sm:w-auto justify-end">
@@ -3318,7 +3825,11 @@ export default function App() {
                         <span>위탁수익</span>
                       </button>
                       <button
-                        onClick={() => setIsFormOpen(true)}
+                        onClick={() => {
+                          setPreSelectedStaffNames([]);
+                          setEditingRecord(null);
+                          setIsFormOpen(true);
+                        }}
                         className="bg-stone-900 text-white h-10 px-3 rounded-xl font-bold flex items-center justify-center gap-1.5 hover:bg-stone-800 transition-all active:scale-95 cursor-pointer whitespace-nowrap text-xs sm:text-sm"
                       >
                         <Plus className="w-4 h-4" />
@@ -3330,86 +3841,108 @@ export default function App() {
 
                 {/* Content */}
                 <div className="mt-4">
-                  {viewMode === "unpaid" ? (
-                    <UnpaidDetailView
-                      records={records}
-                      allUnpaidRecords={allUnpaidRecords}
-                      staff={staff}
-                      selectedDate={selectedDate}
-                      onUpdateRecord={async (id, updates) => {
-                        await updateDispatch(id, updates as any);
-                      }}
-                      onEditRecord={(record) => setEditingRecord(record)}
-                    />
-                  ) : records.length === 0 &&
-                    bouncedRecords.length === 0 &&
-                    unpaidStaffRecords.filter((r) => r.date < selectedDate)
-                      .length === 0 ? (
-                    <div className="bg-white border border-stone-200 rounded-2xl p-12 text-center">
-                      <div className="w-12 h-12 bg-stone-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <Clock className="text-stone-400 w-6 h-6" />
+                  <Suspense
+                    fallback={
+                      <div className="bg-white border border-stone-200 rounded-2xl p-12 text-center">
+                        <div className="w-8 h-8 border-2 border-stone-200 border-t-stone-800 rounded-full animate-spin mx-auto mb-3" />
+                        <p className="text-stone-500 text-sm font-semibold">화면을 불러오는 중...</p>
                       </div>
-                      <p className="text-stone-500">
-                        기록된 파견 내역이 없습니다.
-                      </p>
-                    </div>
-                  ) : viewMode === "list" ? (
-                    <ListView
-                      records={records}
-                      unpaidStaffRecords={unpaidStaffRecords.filter(
-                        (r) => r.date < selectedDate,
-                      )}
-                      onEditRecord={(record) => setEditingRecord(record)}
-                      onAddRecordForStaff={handleAddRecordForStaff}
-                      currentTime={currentTime}
-                      offStaffIds={offStaffIds}
-                      checkInTimes={checkInTimes}
-                      offTimes={offTimes}
-                      onToggleOff={handleToggleOff}
-                      workingStaffIds={workingStaffIds}
-                      onToggleWorking={handleToggleAttendance}
-                      staff={staff}
-                      manualDailyProfits={manualDailyProfits}
-                      onManualProfitClick={onManualProfitClick}
-                      onStaffPaymentClick={(staffName) =>
-                        setDetailModal({
-                          type: "staffPayment",
-                          isOpen: true,
-                          initialSearchTerm: staffName,
-                        })
-                      }
-                      highlightedStaffColumn={highlightedStaffColumn}
-                      selectedDate={selectedDate}
-                      highlightedId={highlightedId}
-                      bouncedRecords={bouncedRecords}
-                      onBounceBadgeClick={(staffName) =>
-                        setSelectedBouncedStaff(staffName)
-                      }
-                      weeklyAttendanceMap={weeklyAttendanceMap}
-                    />
-                  ) : (
-                    <SettlementView
-                      records={records}
-                      unpaidStaffRecords={unpaidStaffRecords.filter(
-                        (r) => r.date < selectedDate,
-                      )}
-                      offStaffIds={offStaffIds}
-                      checkInTimes={checkInTimes}
-                      offTimes={offTimes}
-                      staff={staff}
-                      manualDailyProfits={manualDailyProfits}
-                      onManualProfitClick={onManualProfitClick}
-                      onStaffPaymentClick={(staffName) =>
-                        setDetailModal({
-                          type: "staffPayment",
-                          isOpen: true,
-                          initialSearchTerm: staffName,
-                        })
-                      }
-                      selectedDate={selectedDate}
-                      bouncedRecords={bouncedRecords}
-                    />
-                  )}
+                    }
+                  >
+                    {viewMode === "stats" ? (
+                      <StatsView
+                        staff={staff}
+                        selectedDate={selectedDate}
+                        onSelectDate={(date) => {
+                          setSelectedDate(date);
+                          setViewMode("list");
+                        }}
+                        staffRenameMap={staffRenameMap}
+                      />
+                    ) : viewMode === "unpaid" ? (
+                      <UnpaidDetailView
+                        records={records}
+                        allUnpaidRecords={allUnpaidRecords}
+                        staff={staff}
+                        selectedDate={selectedDate}
+                        onUpdateRecord={async (id, updates) => {
+                          await updateDispatch(id, updates as any);
+                        }}
+                        onEditRecord={(record) => setEditingRecord(record)}
+                      />
+                    ) : records.length === 0 &&
+                      bouncedRecords.length === 0 &&
+                      unpaidStaffRecords.filter((r) => r.date < selectedDate)
+                        .length === 0 ? (
+                      <div className="bg-white border border-stone-200 rounded-2xl p-12 text-center">
+                        <div className="w-12 h-12 bg-stone-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                          <Clock className="text-stone-400 w-6 h-6" />
+                        </div>
+                        <p className="text-stone-500">
+                          기록된 파견 내역이 없습니다.
+                        </p>
+                      </div>
+                    ) : viewMode === "list" ? (
+                      <ListView
+                        records={records}
+                        unpaidStaffRecords={unpaidStaffRecords.filter(
+                          (r) => r.date < selectedDate,
+                        )}
+                        onEditRecord={(record) => setEditingRecord(record)}
+                        onAddRecordForStaff={handleAddRecordForStaff}
+                        currentTime={currentTime}
+                        offStaffIds={offStaffIds}
+                        checkInTimes={checkInTimes}
+                        offTimes={offTimes}
+                        onToggleOff={handleToggleOff}
+                        workingStaffIds={workingStaffIds}
+                        onToggleWorking={handleToggleAttendance}
+                        staff={staff}
+                        manualDailyProfits={manualDailyProfits}
+                        onManualProfitClick={onManualProfitClick}
+                        onStaffPaymentClick={(staffName) =>
+                          setDetailModal({
+                            type: "staffPayment",
+                            isOpen: true,
+                            initialSearchTerm: staffName,
+                            targetStaffName: staffName,
+                          })
+                        }
+                        highlightedStaffColumn={highlightedStaffColumn}
+                        selectedDate={selectedDate}
+                        highlightedId={highlightedId}
+                        bouncedRecords={bouncedRecords}
+                        onBounceBadgeClick={(staffName) =>
+                          setSelectedBouncedStaff(staffName)
+                        }
+                        weeklyAttendanceMap={weeklyAttendanceMap}
+                      />
+                    ) : (
+                      <SettlementView
+                        records={records}
+                        unpaidStaffRecords={unpaidStaffRecords.filter(
+                          (r) => r.date < selectedDate,
+                        )}
+                        workingStaffIds={workingStaffIds}
+                        offStaffIds={offStaffIds}
+                        checkInTimes={checkInTimes}
+                        offTimes={offTimes}
+                        staff={staff}
+                        manualDailyProfits={manualDailyProfits}
+                        onManualProfitClick={onManualProfitClick}
+                        onStaffPaymentClick={(staffName) =>
+                          setDetailModal({
+                            type: "staffPayment",
+                            isOpen: true,
+                            initialSearchTerm: staffName,
+                            targetStaffName: staffName,
+                          })
+                        }
+                        selectedDate={selectedDate}
+                        bouncedRecords={bouncedRecords}
+                      />
+                    )}
+                  </Suspense>
                 </div>
               </main>
 
@@ -3441,24 +3974,51 @@ export default function App() {
                       setEditingRecord(null);
                       setPreSelectedStaffNames([]);
                     }}
-                    selectedDate={selectedDate}
+                    selectedDate={editingRecord?.date || selectedDate}
                     editRecord={editingRecord}
                     preSelectedStaffNames={preSelectedStaffNames}
-                    workingStaff={staff
-                      .filter((s) => workingStaffIds.includes(s.id!))
-                      .sort((a, b) => {
-                        const timeA =
-                          a.id && checkInTimes[a.id]
-                            ? checkInTimes[a.id]?.toMillis?.() || 0
-                            : Number.MAX_SAFE_INTEGER;
-                        const timeB =
-                          b.id && checkInTimes[b.id]
-                            ? checkInTimes[b.id]?.toMillis?.() || 0
-                            : Number.MAX_SAFE_INTEGER;
-                        return timeA - timeB;
-                      })}
+                    workingStaff={(() => {
+                      const currentWorking = staff
+                        .filter((s) => workingStaffIds.includes(s.id!))
+                        .sort((a, b) => {
+                          const timeA =
+                            a.id && checkInTimes[a.id]
+                              ? checkInTimes[a.id]?.toMillis?.() || 0
+                              : Number.MAX_SAFE_INTEGER;
+                          const timeB =
+                            b.id && checkInTimes[b.id]
+                              ? checkInTimes[b.id]?.toMillis?.() || 0
+                              : Number.MAX_SAFE_INTEGER;
+                          return timeA - timeB;
+                        });
+                      if (editingRecord) {
+                        const editStaff = staff.find(
+                          (s) => s.name === editingRecord.staffName,
+                        );
+                        if (
+                          editStaff &&
+                          !currentWorking.some((s) => s.id === editStaff.id)
+                        ) {
+                          return [editStaff, ...currentWorking];
+                        }
+                      }
+                      return currentWorking;
+                    })()}
                     offStaffIds={offStaffIds}
-                    allRecords={records}
+                    allRecords={(() => {
+                      const map = new Map<string, DispatchRecord>();
+                      records.forEach((r) => {
+                        if (r.id) map.set(r.id, r);
+                      });
+                      allUnpaidRecords.forEach((r) => {
+                        if (r.id) map.set(r.id, r);
+                      });
+                      if (editingRecord?.id && !map.has(editingRecord.id)) {
+                        map.set(editingRecord.id, editingRecord);
+                      }
+                      return Array.from(map.values());
+                    })()}
+                    allStaff={staff}
                     establishments={establishments}
                     checkInTimes={checkInTimes}
                     currentTime={currentTime}
@@ -3513,6 +4073,7 @@ export default function App() {
                     selectedDate={selectedDate}
                     manualDailyProfits={manualDailyProfits}
                     initialSearchTerm={detailModal.initialSearchTerm}
+                    targetStaffName={detailModal.targetStaffName}
                   />
                 )}
               </AnimatePresence>
@@ -3535,6 +4096,7 @@ export default function App() {
                 onToggleOffMultiple={handleToggleOffMultiple}
                 onBounceMultiple={handleBounceMultiple}
                 onChoiceMultiple={handleChoiceMultiple}
+                onCancelChoiceMultiple={handleCancelChoiceMultiple}
                 onProgressMultiple={handleProgressMultiple}
                 onFinishMultiple={handleFinishMultiple}
                 onAddRecord={(names) => {
@@ -3578,6 +4140,8 @@ export default function App() {
                       choiceActionModalConfig.initialEstablishmentName
                     }
                     initialTime={choiceActionModalConfig.initialTime}
+                    choiceEntryTime={choiceActionModalConfig.choiceEntryTime}
+                    activeChoices={activeChoices}
                     establishments={establishments}
                     records={records}
                     bouncedRecords={bouncedRecords}
@@ -3599,6 +4163,24 @@ export default function App() {
                     records={records}
                     bouncedRecords={bouncedRecords}
                     onConfirm={handleConfirmBounceModal}
+                  />
+                )}
+              </AnimatePresence>
+
+              <AnimatePresence>
+                {confirmConfig && (
+                  <ConfirmModal
+                    message={confirmConfig.message}
+                    onConfirm={async () => {
+                      const action = confirmConfig.action;
+                      setConfirmConfig(null);
+                      try {
+                        await action();
+                      } catch (e) {
+                        console.error("Confirm action error:", e);
+                      }
+                    }}
+                    onCancel={() => setConfirmConfig(null)}
                   />
                 )}
               </AnimatePresence>
@@ -3676,7 +4258,7 @@ export default function App() {
               )}
             </div>
           </ErrorBoundary>
-        </motion.div>
+        </div>
       )}
     </AnimatePresence>
   );
@@ -3697,6 +4279,7 @@ function StatusStaffModal({
   onToggleOffMultiple,
   onBounceMultiple,
   onChoiceMultiple,
+  onCancelChoiceMultiple,
   onProgressMultiple,
   onFinishMultiple,
   onAddRecord,
@@ -3717,6 +4300,7 @@ function StatusStaffModal({
   onToggleOffMultiple?: (names: string[]) => void | Promise<void>;
   onBounceMultiple?: (names: string[]) => void | Promise<void>;
   onChoiceMultiple?: (names: string[]) => void | Promise<void>;
+  onCancelChoiceMultiple?: (names: string[]) => void | Promise<void>;
   onProgressMultiple?: (names: string[]) => void | Promise<void>;
   onFinishMultiple?: (names: string[]) => void | Promise<void>;
   onAddRecord: (staffNames: string[]) => void;
@@ -4226,27 +4810,37 @@ function StatusStaffModal({
                               )}
                             </div>
                           )}
-                          <span
-                            className={cn(
-                              "font-black leading-tight whitespace-nowrap truncate w-full text-center tracking-tight",
-                              s.name.length >= 6
-                                ? "text-[11px] tracking-tighter"
-                                : s.name.length >= 5
-                                  ? "text-[12px] tracking-tight"
-                                  : "text-[14px]",
-                              isSelected
-                                ? "text-blue-900"
-                                : isOngoing
-                                  ? "text-emerald-900"
-                                  : isWaiting
-                                    ? "text-red-900"
-                                    : isFinished
-                                      ? "text-stone-900"
-                                      : "text-stone-600",
-                            )}
-                          >
-                            {s.name}
-                          </span>
+                          {(() => {
+                            const p = formatStaffNameComponents(s.name);
+                            return (
+                              <div className="flex flex-col items-center justify-center w-full min-w-0">
+                                <span
+                                  className={cn(
+                                    "font-black leading-tight whitespace-nowrap truncate w-full text-center tracking-tight text-[12px] sm:text-[13px]",
+                                    isSelected
+                                      ? "text-blue-900"
+                                      : isOngoing
+                                        ? "text-emerald-900"
+                                        : isWaiting
+                                          ? "text-red-900"
+                                          : isFinished
+                                            ? "text-stone-900"
+                                            : "text-stone-600",
+                                  )}
+                                >
+                                  {p.main4}
+                                </span>
+                                <span
+                                  className={cn(
+                                    "px-1 py-0.2 rounded text-[7.5px] font-black text-white shrink-0 leading-none mt-0.5 shadow-2xs",
+                                    p.isDirect ? "bg-amber-500" : "bg-purple-600",
+                                  )}
+                                >
+                                  {p.affiliation}
+                                </span>
+                              </div>
+                            );
+                          })()}
                           <div className="flex items-center gap-1">
                             {isOngoing && (
                               <>
@@ -4299,25 +4893,54 @@ function StatusStaffModal({
                 </span>
               </div>
               <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                {/* 0. 초이스 */}
-                {onChoiceMultiple && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const names = staff
-                        .filter((s) => selectedIds.has(s.id!))
-                        .map((s) => s.name);
-                      await onChoiceMultiple(names);
-                      setIsSelectionMode(false);
-                      setSelectedIds(new Set());
-                      onClose();
-                    }}
-                    className="bg-purple-600 hover:bg-purple-700 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white flex items-center gap-1 cursor-pointer"
-                  >
-                    <Sparkles className="w-3 h-3 text-purple-200" />
-                    <span>초이스</span>
-                  </button>
-                )}
+                {/* 0. 초이스 / 초이스 취소 */}
+                {(onChoiceMultiple || onCancelChoiceMultiple) && (() => {
+                  const selectedStaffList = staff.filter((s) => selectedIds.has(s.id!));
+                  const selectedChoiceStaff = selectedStaffList.filter(
+                    (s) => !!activeChoices?.[s.name],
+                  );
+                  const hasChoiceInModal = selectedChoiceStaff.length > 0;
+
+                  if (hasChoiceInModal) {
+                    return (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const choiceNames = selectedChoiceStaff.map((s) => s.name);
+                          if (onCancelChoiceMultiple) {
+                            await onCancelChoiceMultiple(choiceNames);
+                          }
+                          setIsSelectionMode(false);
+                          setSelectedIds(new Set());
+                        }}
+                        className="bg-purple-700 hover:bg-purple-800 ring-1 ring-purple-400/50 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white flex items-center gap-1 cursor-pointer"
+                        title="초이스 취소 (대기 상태로 복귀)"
+                      >
+                        <RotateCcw className="w-3 h-3 text-purple-200" />
+                        <span>초이스 취소</span>
+                      </button>
+                    );
+                  }
+
+                  return (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const names = selectedStaffList.map((s) => s.name);
+                        if (onChoiceMultiple) {
+                          await onChoiceMultiple(names);
+                        }
+                        setIsSelectionMode(false);
+                        setSelectedIds(new Set());
+                        onClose();
+                      }}
+                      className="bg-purple-600 hover:bg-purple-700 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white flex items-center gap-1 cursor-pointer"
+                    >
+                      <Sparkles className="w-3 h-3 text-purple-200" />
+                      <span>초이스</span>
+                    </button>
+                  );
+                })()}
 
                 {/* 0-1. 진행 */}
                 {onProgressMultiple && (
@@ -5312,6 +5935,8 @@ function useMultiSelect(
   onBounce?: (names: string[]) => void | Promise<void>,
   onChoice?: (names: string[]) => void | Promise<void>,
   onProgress?: (names: string[]) => void | Promise<void>,
+  onCancelChoice?: (names: string[]) => void | Promise<void>,
+  activeChoices?: Record<string, ActiveChoice>,
 ) {
   const [multiSelected, setMultiSelected] = useState<string[]>([]);
   const [isBounceConfirming, setIsBounceConfirming] = useState(false);
@@ -5375,6 +6000,12 @@ function useMultiSelect(
 
   const renderMultiSelectBar = () => {
     if (multiSelected.length === 0) return null;
+
+    const selectedChoiceNames = multiSelected.filter(
+      (name) => !!activeChoices?.[name],
+    );
+    const hasChoiceStaff = selectedChoiceNames.length > 0;
+
     return (
       <div
         className="fixed bottom-20 sm:bottom-24 left-1/2 -translate-x-1/2 bg-stone-900/95 backdrop-blur-md border border-stone-700 text-white px-2 sm:px-4 py-1.5 sm:py-2.5 rounded-2xl shadow-2xl flex items-center gap-1 sm:gap-2 z-[9999] animate-in slide-in-from-bottom-5 fade-in duration-200 max-w-[98vw]"
@@ -5386,19 +6017,39 @@ function useMultiSelect(
           <span className="sm:hidden">{multiSelected.length}명</span>
         </div>
 
-        {/* 0. 초이스 */}
-        {onChoice && (
-          <button
-            type="button"
-            onClick={async () => {
-              await onChoice(multiSelected);
-              clearSelection();
-            }}
-            className="bg-purple-600 hover:bg-purple-700 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1"
-          >
-            <Sparkles className="w-3 h-3 text-purple-200 hidden sm:inline" />
-            <span>초이스</span>
-          </button>
+        {/* 0. 초이스 / 초이스 취소 */}
+        {(onChoice || onCancelChoice) && (
+          hasChoiceStaff ? (
+            <button
+              type="button"
+              onClick={async () => {
+                if (onCancelChoice) {
+                  await onCancelChoice(selectedChoiceNames);
+                }
+                clearSelection();
+              }}
+              className="bg-purple-700 hover:bg-purple-800 ring-1 ring-purple-400/50 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1"
+              title="초이스 취소 (대기 상태로 복귀)"
+            >
+              <RotateCcw className="w-3 h-3 text-purple-200 hidden sm:inline" />
+              <span>초이스 취소</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={async () => {
+                if (onChoice) {
+                  await onChoice(multiSelected);
+                }
+                clearSelection();
+              }}
+              className="bg-purple-600 hover:bg-purple-700 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1"
+              title="초이스 등록"
+            >
+              <Sparkles className="w-3 h-3 text-purple-200 hidden sm:inline" />
+              <span>초이스</span>
+            </button>
+          )
         )}
 
         {/* 0-1. 진행 */}
@@ -5802,24 +6453,22 @@ function ListView({
               id={`staff-column-${name}`}
               key={name}
               className={cn(
-                "w-44 shrink-0 flex flex-col gap-2 transition-all duration-300 relative rounded-2xl",
+                "w-44 shrink-0 flex flex-col gap-2 transition-all duration-300 relative rounded-2xl scroll-mt-20 sm:scroll-mt-24",
                 highlightedStaffColumn === name &&
-                  "border-4 border-yellow-400 bg-yellow-100/90 shadow-[0_0_25px_rgba(250,204,21,0.95)] scale-[1.02] z-30 animate-pulse text-stone-900 font-black p-1",
+                  "ring-4 ring-red-500 shadow-[0_0_20px_rgba(239,68,68,0.6)] z-30 animate-pulse",
               )}
             >
               {/* Column Header */}
               <div
                 className={cn(
-                  "p-2 rounded-2xl border-2 shadow-sm sticky top-0 z-10 transition-all",
-                  highlightedStaffColumn === name
-                    ? "border-yellow-400 border-4 bg-yellow-200 shadow-yellow-300 shadow-lg"
-                    : !isWorking
-                      ? "border-amber-400 bg-amber-50 shadow-amber-100 shadow-md"
-                      : isOff
-                        ? "border-stone-900 bg-stone-200"
-                        : isOngoing
-                          ? "border-emerald-500 bg-emerald-100 shadow-emerald-100 shadow-lg"
-                          : "border-red-500 bg-red-100 shadow-red-100 shadow-lg",
+                  "p-2 rounded-2xl border-2 shadow-sm transition-all",
+                  !isWorking
+                    ? "border-amber-400 bg-amber-50 shadow-amber-100 shadow-md"
+                    : isOff
+                      ? "border-stone-900 bg-stone-200"
+                      : isOngoing
+                        ? "border-emerald-500 bg-emerald-100 shadow-emerald-100 shadow-lg"
+                        : "border-red-500 bg-red-100 shadow-red-100 shadow-lg",
                 )}
               >
                 <div className="flex items-center justify-between mb-1">
@@ -6407,14 +7056,14 @@ function ListView({
                         key={record.id}
                         onClick={() => onEditRecord(record)}
                         className={cn(
-                          "p-2 rounded-xl border shadow-sm cursor-pointer transition-all active:scale-95 relative",
+                          "p-2 rounded-xl border shadow-sm cursor-pointer transition-all active:scale-95 relative scroll-mt-24",
                           isOngoing
                             ? "bg-purple-600 border-purple-700 text-white"
                             : record.paymentMethod === "UNPAID"
                               ? "bg-red-200 border-red-300"
                               : "bg-green-100 border-green-200",
                           highlightedId === record.id
-                            ? "ring-4 ring-yellow-400 border-yellow-400 scale-[1.04] shadow-2xl z-30 animate-pulse transition-all duration-300 ring-offset-2 ring-offset-stone-900/10"
+                            ? "ring-4 ring-red-500 shadow-2xl shadow-red-500/40 z-30 animate-pulse"
                             : isOngoing
                               ? "animate-pulse ring-2 ring-purple-400 ring-offset-1"
                               : "",
@@ -6765,6 +7414,7 @@ function DetailBreakdownModal({
   selectedDate,
   manualDailyProfits,
   initialSearchTerm,
+  targetStaffName,
 }: {
   type: "revenue" | "commission" | "staffPayment" | "unpaid";
   records: DispatchRecord[];
@@ -6777,6 +7427,7 @@ function DetailBreakdownModal({
   selectedDate: string;
   manualDailyProfits: Record<string, number>;
   initialSearchTerm?: string;
+  targetStaffName?: string;
 }) {
   const [confirmConfig, setConfirmConfig] = useState<{
     message: string;
@@ -6817,10 +7468,23 @@ function DetailBreakdownModal({
   const [searchTerm, setSearchTerm] = useState(initialSearchTerm || "");
   const deferredSearchTerm = useDeferredValue(searchTerm);
   const [showShortageOnly, setShowShortageOnly] = useState(false);
+  const [showUnpaidStaffOnly, setShowUnpaidStaffOnly] = useState(false);
   const [batchAdditionalCollectingKey, setBatchAdditionalCollectingKey] = useState<string | null>(null);
 
   const [localRecords, setLocalRecords] = useState<DispatchRecord[]>([]);
   const customTimeInputRef = useRef<HTMLInputElement>(null);
+
+  const unpaidStaffStats = useMemo(() => {
+    let unpaidCount = 0;
+    let unpaidAmount = 0;
+    localRecords.forEach((r) => {
+      if (!r.isStaffPaid) {
+        unpaidCount += 1;
+        unpaidAmount += r.staffPayment;
+      }
+    });
+    return { unpaidCount, unpaidAmount };
+  }, [localRecords]);
 
   const shortageEstKeys = useMemo(() => {
     const isOngoing = (r: DispatchRecord) => {
@@ -7572,10 +8236,10 @@ function DetailBreakdownModal({
       > = {};
 
       localRecords.forEach((r) => {
-        // Filter by searchTerm if present
+        // Filter by searchTerm if present using precision staff identity separation
         if (
           deferredSearchTerm &&
-          !r.staffName.toLowerCase().includes(deferredSearchTerm.toLowerCase())
+          !matchesStaffSearch(r.staffName, deferredSearchTerm, targetStaffName)
         )
           return;
 
@@ -7585,6 +8249,9 @@ function DetailBreakdownModal({
         // 1. It's today's record
         // 2. It's a record that is currently unpaid
         if (!isToday && r.isStaffPaid) return;
+
+        // If filter is toggled, only show unpaid records
+        if (showUnpaidStaffOnly && r.isStaffPaid) return;
 
         if (!dateGroups[date]) dateGroups[date] = {};
         if (!dateGroups[date][r.staffName]) {
@@ -7604,13 +8271,33 @@ function DetailBreakdownModal({
         if (r.isStaffPaid && !group.method) group.method = r.staffPaymentMethod;
       });
 
-      // Sort dates descending
-      const sortedDates = Object.keys(dateGroups).sort((a, b) =>
-        b.localeCompare(a),
-      );
+      // Split dates into dates with unpaid staff vs dates with all paid staff
+      const datesWithUnpaid: string[] = [];
+      const datesAllPaid: string[] = [];
+
+      Object.entries(dateGroups).forEach(([date, staffMap]) => {
+        const hasUnpaid = Object.values(staffMap).some((d) => !d.isPaid);
+        if (hasUnpaid) {
+          datesWithUnpaid.push(date);
+        } else {
+          datesAllPaid.push(date);
+        }
+      });
+
+      // Sort dates descending within their groups
+      datesWithUnpaid.sort((a, b) => b.localeCompare(a));
+      datesAllPaid.sort((a, b) => b.localeCompare(a));
+
+      // Put dates with unpaid records at the TOP
+      const sortedDates = [...datesWithUnpaid, ...datesAllPaid];
 
       return sortedDates.map((date) => {
         const staffEntries = Object.entries(dateGroups[date]).sort((a, b) => {
+          const isPaidA = a[1].isPaid ? 1 : 0;
+          const isPaidB = b[1].isPaid ? 1 : 0;
+          // Unpaid (isPaid === false -> 0) comes BEFORE Paid (isPaid === true -> 1)
+          if (isPaidA !== isPaidB) return isPaidA - isPaidB;
+
           const nameA = a[0];
           const nameB = b[0];
           const sA = staff.find((s) => s.name === nameA);
@@ -7645,7 +8332,7 @@ function DetailBreakdownModal({
         // Filter by deferredSearchTerm
         if (
           deferredSearchTerm &&
-          !name.toLowerCase().includes(deferredSearchTerm.toLowerCase())
+          !matchesStaffSearch(name, deferredSearchTerm, targetStaffName)
         )
           return;
 
@@ -7668,11 +8355,15 @@ function DetailBreakdownModal({
           }
 
           // Filter by deferredSearchTerm
-          if (
-            deferredSearchTerm &&
-            !key.toLowerCase().includes(deferredSearchTerm.toLowerCase())
-          )
-            return;
+          if (deferredSearchTerm) {
+            if (type === "revenue") {
+              if (!key.toLowerCase().includes(deferredSearchTerm.toLowerCase()))
+                return;
+            } else {
+              if (!matchesStaffSearch(key, deferredSearchTerm, targetStaffName))
+                return;
+            }
+          }
 
           groups[key] = (groups[key] || 0) + val;
         });
@@ -7700,6 +8391,7 @@ function DetailBreakdownModal({
     manualDailyProfits,
     deferredSearchTerm,
     showShortageOnly,
+    showUnpaidStaffOnly,
     shortageEstKeys,
   ]);
 
@@ -7767,13 +8459,31 @@ function DetailBreakdownModal({
         <div className="p-6 border-b border-stone-100 flex items-center justify-between bg-stone-50">
           <div>
             <h2 className="text-lg font-bold text-stone-900">{title}</h2>
-            <p className="text-xs text-stone-500 font-bold mt-1">
-              총 합계: {total.toLocaleString()}원
-            </p>
+            {type === "staffPayment" ? (
+              <div className="flex items-center gap-2 mt-1">
+                {unpaidStaffStats.unpaidCount > 0 ? (
+                  <span className="text-xs text-red-600 font-black">
+                    미지급: {(unpaidStaffStats.unpaidAmount / 10000).toFixed(1)}만 ({unpaidStaffStats.unpaidCount}건)
+                  </span>
+                ) : (
+                  <span className="text-xs text-emerald-600 font-bold">
+                    ✓ 전원 지급완료
+                  </span>
+                )}
+                <span className="text-xs text-stone-300 font-light">|</span>
+                <span className="text-xs text-stone-500 font-bold">
+                  총 합계: {(total / 10000).toFixed(1)}만
+                </span>
+              </div>
+            ) : (
+              <p className="text-xs text-stone-500 font-bold mt-1">
+                총 합계: {total.toLocaleString()}원
+              </p>
+            )}
           </div>
           <button
             onClick={onClose}
-            className="text-stone-400 hover:text-stone-900 p-2 bg-white rounded-full shadow-sm border border-stone-100"
+            className="text-stone-400 hover:text-stone-900 p-2 bg-white rounded-full shadow-sm border border-stone-100 cursor-pointer"
           >
             <Plus className="w-5 h-5 rotate-45" />
           </button>
@@ -7817,6 +8527,33 @@ function DetailBreakdownModal({
                     )}
                   >
                     {shortageCount}건
+                  </span>
+                </button>
+              </div>
+            )}
+
+            {type === "staffPayment" && (
+              <div className="flex items-center gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => setShowUnpaidStaffOnly(!showUnpaidStaffOnly)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-xl font-black text-xs transition-all flex items-center gap-1.5 border shadow-2xs cursor-pointer active:scale-95",
+                    showUnpaidStaffOnly
+                      ? "bg-red-500 text-white border-red-600 ring-2 ring-red-300"
+                      : "bg-white text-stone-600 border-stone-200 hover:bg-stone-100",
+                  )}
+                >
+                  <span>🚨 미지급 내역만 우선 보기</span>
+                  <span
+                    className={cn(
+                      "px-1.5 py-0.2 rounded-full text-[10px] font-bold",
+                      showUnpaidStaffOnly
+                        ? "bg-red-700 text-white"
+                        : "bg-stone-100 text-stone-600 border border-stone-200",
+                    )}
+                  >
+                    {unpaidStaffStats.unpaidCount}건
                   </span>
                 </button>
               </div>
@@ -8176,7 +8913,7 @@ function DetailBreakdownModal({
                             id={`record-${r.id}`}
                             key={r.id}
                             className={cn(
-                              "flex justify-between items-center group p-2 rounded-xl transition-all",
+                              "flex justify-between items-center group p-2 rounded-xl transition-all scroll-mt-24",
                               highlightedId === r.id &&
                                 "ring-4 ring-emerald-500 bg-emerald-100/90 scale-[1.03] shadow-xl z-20 animate-pulse transition-all duration-300",
                             )}
@@ -8640,7 +9377,7 @@ function DetailBreakdownModal({
                     containIntrinsicSize: "auto 200px",
                   }}
                 >
-                  <div className="sticky top-0 bg-white/95 backdrop-blur-sm py-2 z-20">
+                  <div className="sticky top-0 bg-white/95 backdrop-blur-sm py-2 z-20 flex items-center justify-between">
                     <div className="px-3 py-1.5 bg-white border-2 border-stone-900 rounded-xl inline-flex items-center gap-2 shadow-md">
                       <Calendar className="w-3.5 h-3.5 text-stone-900" />
                       <span className="text-xs font-black text-stone-900">
@@ -8650,6 +9387,26 @@ function DetailBreakdownModal({
                         {getRelativeDateLabel(date)}
                       </span>
                     </div>
+
+                    {(() => {
+                      const dateUnpaidStaff = staffList.filter(([_, d]) => !d.isPaid);
+                      const dateUnpaidTotal = dateUnpaidStaff.reduce(
+                        (sum, [_, d]) => sum + d.total,
+                        0,
+                      );
+                      if (dateUnpaidStaff.length > 0) {
+                        return (
+                          <span className="px-2.5 py-1 rounded-xl text-xs font-black bg-red-50 text-red-600 border border-red-200 shadow-2xs">
+                            미지급 {dateUnpaidStaff.length}명 ({(dateUnpaidTotal / 10000).toFixed(1)}만)
+                          </span>
+                        );
+                      }
+                      return (
+                        <span className="px-2.5 py-1 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+                          ✓ 전원 지급완료
+                        </span>
+                      );
+                    })()}
                   </div>
 
                   <div className="space-y-4">
@@ -8663,7 +9420,7 @@ function DetailBreakdownModal({
                             ? "ring-4 ring-emerald-500 scale-[1.02] bg-emerald-50/50 border-emerald-500 shadow-xl z-20"
                             : d.isPaid
                               ? "bg-emerald-50/30 border-emerald-500/50"
-                              : "bg-white border-red-500/50 shadow-red-50",
+                              : "bg-red-50/40 border-red-500 shadow-sm ring-1 ring-red-200",
                         )}
                       >
                         <div className="flex items-center justify-between">
@@ -8696,6 +9453,11 @@ function DetailBreakdownModal({
                                     staff.find((s) => s.name === name)
                                       ?.accountNumber
                                   }
+                                </span>
+                              )}
+                              {!d.isPaid && (
+                                <span className="text-[10px] font-black px-1.5 py-0.5 rounded border border-red-200 bg-red-100 text-red-700 flex items-center gap-0.5 shadow-2xs">
+                                  미지급
                                 </span>
                               )}
                               {d.isPaid && (
@@ -10395,6 +11157,7 @@ function DispatchFormModal({
   workingStaff,
   offStaffIds,
   allRecords,
+  allStaff,
   establishments,
   checkInTimes,
   currentTime,
@@ -10407,11 +11170,14 @@ function DispatchFormModal({
   workingStaff: Staff[];
   offStaffIds: string[];
   allRecords: DispatchRecord[];
+  allStaff?: Staff[];
   establishments: { id: string; name: string }[];
   checkInTimes: Record<string, any>;
   currentTime: Date;
   onAlert: (message: string) => void;
 }) {
+  const targetDate = editRecord?.date || selectedDate;
+
   const { initialStaffNames, groupStaffNames, groupRecords } = useMemo(() => {
     if (editRecord) {
       const start = editRecord.startTime.toDate
@@ -10426,18 +11192,25 @@ function DispatchFormModal({
             : new Date(r.startTime).getTime()) === start.getTime(),
       );
 
+      const finalGroup = group.some((r) => r.id === editRecord.id)
+        ? group
+        : [editRecord, ...group];
+
       return {
         initialStaffNames: [editRecord.staffName],
-        groupStaffNames: group.map((r) => r.staffName),
-        groupRecords: group,
+        groupStaffNames: finalGroup.map((r) => r.staffName),
+        groupRecords: finalGroup,
       };
     }
+    const validPreSelected = (preSelectedStaffNames || []).filter((name) =>
+      workingStaff.some((s) => s.name === name),
+    );
     return {
-      initialStaffNames: preSelectedStaffNames || ([] as string[]),
+      initialStaffNames: validPreSelected,
       groupStaffNames: [] as string[],
       groupRecords: [] as DispatchRecord[],
     };
-  }, [editRecord, allRecords, preSelectedStaffNames]);
+  }, [editRecord, allRecords, preSelectedStaffNames, workingStaff]);
 
   const [formData, setFormData] = useState({
     staffNames: initialStaffNames,
@@ -10504,7 +11277,9 @@ function DispatchFormModal({
   }, [establishments, formData.establishmentName]);
 
   const toggleStaffSelection = (name: string) => {
-    const s = workingStaff.find((staff) => staff.name === name);
+    const s =
+      workingStaff.find((staff) => staff.name === name) ||
+      allStaff?.find((staff) => staff.name === name);
     setFormData((prev) => {
       const isSelected = prev.staffNames.includes(name);
       let newNames: string[];
@@ -10543,8 +11318,35 @@ function DispatchFormModal({
 
   const [newStaffToCreate, setNewStaffToCreate] = useState<string[]>([]);
   const [alreadyWorkingStaff, setAlreadyWorkingStaff] = useState<string[]>([]);
+  const establishmentInputRef = useRef<HTMLInputElement>(null);
   const startTimeInputRef = useRef<HTMLInputElement>(null);
   const endTimeInputRef = useRef<HTMLInputElement>(null);
+
+  const handleSelectEstablishment = (name: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      establishmentName: name,
+    }));
+    setIsEstablishmentDropdownOpen(false);
+
+    // Completely dismiss active focus and virtual mobile keyboards
+    establishmentInputRef.current?.blur();
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    requestAnimationFrame(() => {
+      establishmentInputRef.current?.blur();
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+    });
+    setTimeout(() => {
+      establishmentInputRef.current?.blur();
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+    }, 100);
+  };
 
   useEffect(() => {
     setIsTimeDirty(false);
@@ -10575,7 +11377,9 @@ function DispatchFormModal({
         : true;
 
       if (isStaffChanged) {
-        const staffMember = workingStaff.find((s) => s.name === firstStaffName);
+        const staffMember =
+          workingStaff.find((s) => s.name === firstStaffName) ||
+          allStaff?.find((s) => s.name === firstStaffName);
         if (staffMember) {
           let targetSystemType: SystemType = "TABLE";
           if (staffMember.type === "PUBLIC") targetSystemType = "PUBLIC";
@@ -10588,7 +11392,7 @@ function DispatchFormModal({
         }
       }
     }
-  }, [formData.staffNames, editRecord, workingStaff]);
+  }, [formData.staffNames, editRecord, workingStaff, allStaff]);
 
   const getErrorMessage = (err: any, fallback: string) => {
     if (typeof err === "string") return err;
@@ -10620,8 +11424,8 @@ function DispatchFormModal({
         } else if (formatted.length === 5 && nextEndTime.length === 5) {
           // 종료 처리 된 업무박스: 개별적으로 변경되나, 시작시간이 종료시간보다 뒤로 갈 경우에만 종료시간을 맞춰줌
           try {
-            const start = getBusinessDate(selectedDate, formatted);
-            const end = getBusinessDate(selectedDate, nextEndTime);
+            const start = getBusinessDate(targetDate, formatted);
+            const end = getBusinessDate(targetDate, nextEndTime);
             if (start > end) {
               nextEndTime = formatted;
             }
@@ -10665,8 +11469,8 @@ function DispatchFormModal({
         } else {
           // 종료 처리 된 업무박스: 개별적으로 변경되나, 시작시간이 종료시간보다 뒤로 갈 경우에만 종료시간을 맞춰줌
           try {
-            const start = getBusinessDate(selectedDate, newTime);
-            const end = getBusinessDate(selectedDate, nextEndTime);
+            const start = getBusinessDate(targetDate, newTime);
+            const end = getBusinessDate(targetDate, nextEndTime);
             if (start > end) {
               nextEndTime = newTime;
             }
@@ -10694,8 +11498,8 @@ function DispatchFormModal({
     isReviewNeeded,
   } = useMemo(() => {
     try {
-      const start = getBusinessDate(selectedDate, formData.startTime);
-      const end = getBusinessDate(selectedDate, formData.endTime);
+      const start = getBusinessDate(targetDate, formData.startTime);
+      const end = getBusinessDate(targetDate, formData.endTime);
       const diffMinutes = Math.max(
         0,
         Math.round((end.getTime() - start.getTime()) / (1000 * 60)),
@@ -10724,7 +11528,7 @@ function DispatchFormModal({
         isReviewNeeded: false,
       };
     }
-  }, [selectedDate, formData.startTime, formData.endTime]);
+  }, [targetDate, formData.startTime, formData.endTime]);
 
   const handleBounceClick = async () => {
     if (!isBounceConfirming) {
@@ -10741,12 +11545,29 @@ function DispatchFormModal({
 
     try {
       if (editRecord?.id) {
-        const recordsToDelete = groupRecords.filter((r) =>
-          formData.staffNames.includes(r.staffName),
-        );
-        for (const record of recordsToDelete) {
-          if (record.id) {
-            await deleteDispatch(record.id);
+        if (
+          formData.staffNames.length === 1 &&
+          formData.staffNames[0] === editRecord.staffName
+        ) {
+          await deleteDispatch(editRecord.id);
+        } else {
+          const deletedIds = new Set<string>();
+          for (const sName of formData.staffNames) {
+            if (sName === editRecord.staffName) {
+              await deleteDispatch(editRecord.id);
+              deletedIds.add(editRecord.id);
+            } else {
+              const match = groupRecords.find(
+                (r) =>
+                  r.staffName === sName &&
+                  r.id &&
+                  !deletedIds.has(r.id),
+              );
+              if (match?.id) {
+                await deleteDispatch(match.id);
+                deletedIds.add(match.id);
+              }
+            }
           }
         }
       }
@@ -10756,7 +11577,7 @@ function DispatchFormModal({
           staffName,
           establishmentName: formData.establishmentName || "미정",
           time: formData.startTime || format(new Date(), "HH:mm"),
-          date: selectedDate,
+          date: targetDate,
         });
       }
 
@@ -10794,8 +11615,8 @@ function DispatchFormModal({
     setError(null);
 
     try {
-      const start = getBusinessDate(selectedDate, formData.startTime);
-      let end = getBusinessDate(selectedDate, formData.endTime);
+      const start = getBusinessDate(targetDate, formData.startTime);
+      let end = getBusinessDate(targetDate, formData.endTime);
 
       // 시작 시간이 종료 시간보다 뒤로 설정되었을 경우, 자동으로 종료 시간을 시작 시간과 동일하게 맞추고 '업무중' 상태로 등록
       if (end < start) {
@@ -10839,6 +11660,9 @@ function DispatchFormModal({
             timesOverlap
           );
         });
+        if (!groupRecords.some((r) => r.id === editRecord.id)) {
+          groupRecords = [editRecord, ...groupRecords];
+        }
         excludeIds = groupRecords.map((r) => r.id!).filter(Boolean);
       }
 
@@ -10864,7 +11688,7 @@ function DispatchFormModal({
       const ongoingStaffNames = allRecords
         .filter((r) => {
           if (!formData.staffNames.includes(r.staffName)) return false;
-          if (r.date !== selectedDate) return false;
+          if (r.date !== targetDate) return false;
           if (excludeIds.includes(r.id!)) return false; // Exclude current group if editing
 
           const rStart = r.startTime.toDate
@@ -10932,7 +11756,7 @@ function DispatchFormModal({
             // Only consider records that match the establishment and date (likely part of the same or similar group)
             return (
               r.establishmentName === formData.establishmentName &&
-              r.date === selectedDate
+              r.date === targetDate
             );
           });
 
@@ -10970,7 +11794,9 @@ function DispatchFormModal({
             (r) => r.staffName === staffName,
           );
           if (recordToUpdate) {
-            const s = workingStaff.find((staff) => staff.name === staffName);
+            const s =
+              workingStaff.find((staff) => staff.name === staffName) ||
+              allStaff?.find((staff) => staff.name === staffName);
             const staffSystemType =
               isSystemTypeDirty || editRecord
                 ? formData.systemType
@@ -10996,10 +11822,13 @@ function DispatchFormModal({
               isBanti: formData.isBanti || false,
               isNoBanti: formData.isNoBanti || false,
               isStaffPaid: formData.isStaffPaid || false,
+              staffPaidAt: formData.isStaffPaid
+                ? recordToUpdate.staffPaidAt || Timestamp.now()
+                : null,
               staffPaymentMethod: formData.staffPaymentMethod || null,
               tip: Number(formData.tip),
               extraFullUnits: Number(formData.extraFullUnits || 0),
-              date: selectedDate,
+              date: targetDate,
               collectedAt: isCollectingNow
                 ? Timestamp.now()
                 : formData.paymentMethod === "UNPAID"
@@ -11051,7 +11880,9 @@ function DispatchFormModal({
 
         // Add new staff to the group during edit
         const addPromises = staffToAdd.map(async (staffName) => {
-          const s = workingStaff.find((staff) => staff.name === staffName);
+          const s =
+            workingStaff.find((staff) => staff.name === staffName) ||
+            allStaff?.find((staff) => staff.name === staffName);
           const staffSystemType =
             isSystemTypeDirty || editRecord
               ? formData.systemType
@@ -11076,10 +11907,11 @@ function DispatchFormModal({
             isBanti: formData.isBanti || false,
             isNoBanti: formData.isNoBanti || false,
             isStaffPaid: formData.isStaffPaid || false,
+            staffPaidAt: formData.isStaffPaid ? Timestamp.now() : null,
             staffPaymentMethod: formData.staffPaymentMethod || null,
             tip: Number(formData.tip),
             extraFullUnits: Number(formData.extraFullUnits || 0),
-            date: selectedDate,
+            date: targetDate,
             collectedAt: isPaidImmediately ? Timestamp.now() : null,
             isDispatchBoxCollection: isPaidImmediately ? true : false,
             wasUnpaid: formData.paymentMethod === "UNPAID",
@@ -11094,7 +11926,9 @@ function DispatchFormModal({
       } else {
         // Add records for each staff
         const addPromises = formData.staffNames.map(async (staffName) => {
-          const s = workingStaff.find((staff) => staff.name === staffName);
+          const s =
+            workingStaff.find((staff) => staff.name === staffName) ||
+            allStaff?.find((staff) => staff.name === staffName);
           const staffSystemType =
             isSystemTypeDirty || editRecord
               ? formData.systemType
@@ -11119,10 +11953,11 @@ function DispatchFormModal({
             isBanti: formData.isBanti || false,
             isNoBanti: formData.isNoBanti || false,
             isStaffPaid: formData.isStaffPaid || false,
+            staffPaidAt: formData.isStaffPaid ? Timestamp.now() : null,
             staffPaymentMethod: formData.staffPaymentMethod || null,
             tip: Number(formData.tip),
             extraFullUnits: Number(formData.extraFullUnits || 0),
-            date: selectedDate,
+            date: targetDate,
             collectedAt: isPaidImmediately ? Timestamp.now() : null,
             isDispatchBoxCollection: isPaidImmediately ? true : false,
             wasUnpaid: formData.paymentMethod === "UNPAID",
@@ -11464,28 +12299,45 @@ function DispatchFormModal({
                   {formData.staffNames.length === 0
                     ? "선택"
                     : formData.staffNames.length === 1
-                      ? formData.staffNames[0]
-                      : `${formData.staffNames[0]} 외 ${formData.staffNames.length - 1}명`}
+                      ? (() => {
+                          const p = formatStaffNameComponents(formData.staffNames[0]);
+                          return `${p.main4} (${p.affiliation})`;
+                        })()
+                      : (() => {
+                          const p = formatStaffNameComponents(formData.staffNames[0]);
+                          return `${p.main4} (${p.affiliation}) 외 ${formData.staffNames.length - 1}명`;
+                        })()}
                 </span>
                 <ChevronRight className="w-4 h-4 text-stone-400 shrink-0" />
               </button>
               {editRecord && groupStaffNames.length > 1 && (
                 <div className="mt-1 flex flex-wrap gap-1">
-                  {groupStaffNames.map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      onClick={() => toggleStaffSelection(name)}
-                      className={cn(
-                        "text-[10px] px-2 py-0.5 rounded-lg font-black border transition-all active:scale-95 cursor-pointer",
-                        formData.staffNames.includes(name)
-                          ? "bg-stone-900 border-stone-900 text-white shadow-2xs"
-                          : "bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100",
-                      )}
-                    >
-                      {name}
-                    </button>
-                  ))}
+                  {groupStaffNames.map((name) => {
+                    const p = formatStaffNameComponents(name);
+                    return (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() => toggleStaffSelection(name)}
+                        className={cn(
+                          "text-[10px] px-2 py-0.5 rounded-lg font-black border transition-all active:scale-95 cursor-pointer flex items-center gap-1",
+                          formData.staffNames.includes(name)
+                            ? "bg-stone-900 border-stone-900 text-white shadow-2xs"
+                            : "bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100",
+                        )}
+                      >
+                        <span>{p.main4}</span>
+                        <span
+                          className={cn(
+                            "px-1 py-0.2 rounded text-[7.5px] font-black text-white shrink-0 leading-none",
+                            p.isDirect ? "bg-amber-500" : "bg-purple-600",
+                          )}
+                        >
+                          {p.affiliation}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -11494,15 +12346,17 @@ function DispatchFormModal({
                 업소명
               </label>
               <input
+                ref={establishmentInputRef}
                 required
                 type="text"
                 value={formData.establishmentName}
-                onChange={(e) =>
+                onChange={(e) => {
                   setFormData({
                     ...formData,
                     establishmentName: e.target.value,
-                  })
-                }
+                  });
+                  setIsEstablishmentDropdownOpen(true);
+                }}
                 onFocus={(e) => {
                   setIsEstablishmentDropdownOpen(true);
                   e.target.select();
@@ -11520,11 +12374,7 @@ function DispatchFormModal({
                     filteredEstablishments.length > 0
                   ) {
                     e.preventDefault();
-                    setFormData({
-                      ...formData,
-                      establishmentName: filteredEstablishments[0].name,
-                    });
-                    setIsEstablishmentDropdownOpen(false);
+                    handleSelectEstablishment(filteredEstablishments[0].name);
                   }
                 }}
                 className="w-full bg-stone-50 hover:bg-stone-100/80 focus:bg-white border border-stone-200 focus:border-stone-900 rounded-xl px-3 py-2 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-stone-900/10 font-black text-stone-900 transition-all shadow-2xs"
@@ -11540,11 +12390,15 @@ function DispatchFormModal({
                         type="button"
                         onMouseDown={(ev) => {
                           ev.preventDefault();
-                          setFormData({
-                            ...formData,
-                            establishmentName: e.name,
-                          });
-                          setIsEstablishmentDropdownOpen(false);
+                          handleSelectEstablishment(e.name);
+                        }}
+                        onTouchStart={(ev) => {
+                          ev.preventDefault();
+                          handleSelectEstablishment(e.name);
+                        }}
+                        onClick={(ev) => {
+                          ev.preventDefault();
+                          handleSelectEstablishment(e.name);
                         }}
                         className="w-full text-left px-3 py-2 text-xs sm:text-sm hover:bg-stone-50 font-black text-stone-800 hover:text-stone-900 transition-colors flex items-center justify-between cursor-pointer"
                       >
@@ -11858,14 +12712,31 @@ function DispatchFormModal({
                     }
 
                     try {
-                      // Delete all selected staff records that are part of this group
-                      const recordsToDelete = groupRecords.filter((r) =>
-                        formData.staffNames.includes(r.staffName),
-                      );
-
-                      if (recordsToDelete.length > 0) {
-                        for (const record of recordsToDelete) {
-                          await deleteDispatch(record.id!);
+                      if (editRecord?.id) {
+                        if (
+                          formData.staffNames.length === 1 &&
+                          formData.staffNames[0] === editRecord.staffName
+                        ) {
+                          await deleteDispatch(editRecord.id);
+                        } else {
+                          const deletedIds = new Set<string>();
+                          for (const sName of formData.staffNames) {
+                            if (sName === editRecord.staffName) {
+                              await deleteDispatch(editRecord.id);
+                              deletedIds.add(editRecord.id);
+                            } else {
+                              const match = groupRecords.find(
+                                (r) =>
+                                  r.staffName === sName &&
+                                  r.id &&
+                                  !deletedIds.has(r.id),
+                              );
+                              if (match?.id) {
+                                await deleteDispatch(match.id);
+                                deletedIds.add(match.id);
+                              }
+                            }
+                          }
                         }
                       }
 
@@ -12048,23 +12919,40 @@ function DispatchFormModal({
                           className={cn(baseClasses, stateClasses)}
                         >
                           <div className="flex flex-col sm:flex-row items-center justify-center gap-1 w-full relative z-10 text-[13px] sm:text-sm">
-                            <span className="whitespace-nowrap">{s.name}</span>
-                            <span
-                              className={cn(
-                                "px-1 py-0.5 rounded text-[8px] font-bold text-white shrink-0 mt-0.5 sm:mt-0",
-                                s.type === "HOPPER"
-                                  ? "bg-purple-500"
-                                  : s.type === "PUBLIC"
-                                    ? "bg-blue-500"
-                                    : "bg-emerald-500",
-                              )}
-                            >
-                              {s.type === "HOPPER"
-                                ? "하"
-                                : s.type === "PUBLIC"
-                                  ? "퍼"
-                                  : "커"}
-                            </span>
+                            {(() => {
+                              const p = formatStaffNameComponents(s.name);
+                              return (
+                                <>
+                                  <span className="whitespace-nowrap">{p.main4}</span>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <span
+                                      className={cn(
+                                        "px-1 py-0.5 rounded text-[8px] font-bold text-white shrink-0 mt-0.5 sm:mt-0",
+                                        s.type === "HOPPER"
+                                          ? "bg-purple-500"
+                                          : s.type === "PUBLIC"
+                                            ? "bg-blue-500"
+                                            : "bg-emerald-500",
+                                      )}
+                                    >
+                                      {s.type === "HOPPER"
+                                        ? "하"
+                                        : s.type === "PUBLIC"
+                                          ? "퍼"
+                                          : "커"}
+                                    </span>
+                                    <span
+                                      className={cn(
+                                        "px-1 py-0.2 rounded text-[7.5px] font-black text-white shrink-0 leading-none shadow-2xs",
+                                        p.isDirect ? "bg-amber-500" : "bg-purple-600",
+                                      )}
+                                    >
+                                      {p.affiliation}
+                                    </span>
+                                  </div>
+                                </>
+                              );
+                            })()}
                           </div>
                           {s.id && checkInTimes[s.id] && (
                             <span
