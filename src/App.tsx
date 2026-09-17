@@ -63,7 +63,7 @@ import {
 import { ko } from "date-fns/locale";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { Timestamp } from "firebase/firestore";
+import { Timestamp, deleteField } from "firebase/firestore";
 import {
   DispatchRecord,
   SystemType,
@@ -11044,8 +11044,12 @@ function DispatchFormModal({
                       recordToUpdate,
                       formData.paymentMethod,
                     ),
-              collectedAmount:
-                formData.paymentMethod === "UNPAID"
+              // 미수 → 현장 수금(현금/계좌)으로 바꾸는 경우: 이 기록 청구액 전액을 현장에서 받은 것이므로
+              // 부분수금용 collectedAmount 는 삭제한다. (예전 '전체 취소'가 남긴 0 이 그대로 따라오면
+              // 0원 수금으로 계산되어 업소 총수금에서 빠지는 문제가 있었다.)
+              collectedAmount: isCollectingNow
+                ? (deleteField() as any)
+                : formData.paymentMethod === "UNPAID"
                   ? undefined
                   : recordToUpdate.collectedAmount,
               depositorName:

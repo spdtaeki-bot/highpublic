@@ -15,7 +15,8 @@ import {
   getDocs,
   arrayUnion,
   arrayRemove,
-  deleteField
+  deleteField,
+  FieldValue
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { DispatchRecord, BouncedRecord, SYSTEM_RATES, COMMISSION_RATE, SystemType, StaffType, ActiveChoice } from '../types';
@@ -44,11 +45,12 @@ export const sanitizeForFirestore = <T>(obj: T): T => {
   if (obj === null || obj === undefined) {
     return obj;
   }
-  // Preserve Timestamps and JS Dates
+  // Preserve Timestamps, JS Dates and Firestore sentinels (deleteField / arrayUnion ...)
   if (
     typeof obj === 'object' &&
     (obj instanceof Timestamp ||
       obj instanceof Date ||
+      obj instanceof FieldValue ||
       (typeof (obj as any).toDate === 'function' && typeof (obj as any).seconds === 'number'))
   ) {
     return obj;
@@ -856,6 +858,27 @@ export const updateDispatch = async (id: string, data: Partial<DispatchRecord>) 
   }
 };
 
+/**
+ * Firestore 문서 → 화면용 기록으로 읽을 때의 정규화.
+ *
+ * `collectedAmount` 는 "부분 수금/감액이 있을 때만" 의미가 있는 값이다.
+ * 수금 완료(현금/계좌) 상태인데 저장된 수금 이력이 없고 collectedAmount 가 0 이면,
+ * 이는 실제로 0원을 받은 것이 아니라 예전 '전체 취소'(미수 전환 시 0 기록)가 남긴 값이
+ * 이후 파견 수정 폼에서 현장 수금으로 바꿀 때 그대로 따라온 흔적이다.
+ * (0원 수금은 항상 수금 이력과 함께 저장되므로, 이력 없는 0 은 '미기록'과 같다.)
+ * 이런 값은 제거해서 다른 현장 수금 기록과 동일하게 "청구액 전액 수금"으로 읽히게 한다.
+ * 저장된 데이터는 건드리지 않는다 (읽기 해석만 통일).
+ */
+export const normalizeDispatchRecord = (id: string, data: Record<string, any>): DispatchRecord => {
+  const record = { id, ...data } as DispatchRecord;
+  const isPaid = record.paymentMethod === 'CASH' || record.paymentMethod === 'TRANSFER';
+  const hasStoredHistory = Array.isArray(record.collectionHistory) && record.collectionHistory.length > 0;
+  if (isPaid && !hasStoredHistory && record.collectedAmount === 0) {
+    delete (record as any).collectedAmount;
+  }
+  return record;
+};
+
 export const subscribeToDispatches = (date: string, callback: (records: DispatchRecord[]) => void, onError?: (error: Error) => void) => {
   const q = query(
     collection(db, COLLECTION_NAME),
@@ -865,10 +888,7 @@ export const subscribeToDispatches = (date: string, callback: (records: Dispatch
   );
 
   return onSnapshot(q, (snapshot) => {
-    const records = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    } as DispatchRecord));
+    const records = snapshot.docs.map(doc => normalizeDispatchRecord(doc.id, doc.data()));
     callback(records);
   }, (error) => {
     if (onError) onError(error);
@@ -886,10 +906,7 @@ export const subscribeToAllUnpaidDispatches = (callback: (records: DispatchRecor
   );
 
   return onSnapshot(q, (snapshot) => {
-    const records = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    } as DispatchRecord));
+    const records = snapshot.docs.map(doc => normalizeDispatchRecord(doc.id, doc.data()));
     callback(records);
   }, (error) => {
     if (onError) onError(error);
@@ -907,10 +924,7 @@ export const subscribeToUnpaidStaffDispatches = (callback: (records: DispatchRec
   );
 
   return onSnapshot(q, (snapshot) => {
-    const records = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    } as DispatchRecord));
+    const records = snapshot.docs.map(doc => normalizeDispatchRecord(doc.id, doc.data()));
     callback(records);
   }, (error) => {
     if (onError) onError(error);
