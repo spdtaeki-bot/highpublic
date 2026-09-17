@@ -1684,7 +1684,7 @@ export default function App() {
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     // 사무실 비밀번호 설정 (원하시는 대로 변경 가능)
-    if (password === "1234") {
+    if (password === "0724") {
       localStorage.setItem("office_auth", "true");
       setIsAuthenticated(true);
       setAuthError(null);
@@ -2253,14 +2253,6 @@ export default function App() {
                 접속하기
               </button>
             </form>
-
-            <p className="mt-6 text-[11px] text-stone-400">
-              구글 로그인 에러를 해결하기 위해 비밀번호 시스템으로
-              변경되었습니다.
-              <br />
-              초기 비밀번호는{" "}
-              <span className="font-bold text-stone-600">1234</span> 입니다.
-            </p>
           </motion.div>
         </motion.div>
       ) : (
