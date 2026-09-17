@@ -548,7 +548,15 @@ export function SettlementView({
     let paidStaffCount = 0;
     let unpaidStaffCount = 0;
     let directDeposit = 0;
+    let directPaidDeposit = 0;
+    let directRemainingDeposit = 0;
+    let directPaidStaffCount = 0;
+    let directUnpaidStaffCount = 0;
     let delegatedDeposit = 0;
+    let delegatedPaidDeposit = 0;
+    let delegatedRemainingDeposit = 0;
+    let delegatedPaidStaffCount = 0;
+    let delegatedUnpaidStaffCount = 0;
     let totalStaffCount = 0;
     let directStaffCount = 0;
     let delegatedStaffCount = 0;
@@ -564,9 +572,17 @@ export function SettlementView({
       totalStaffCount += aff.staffList.length;
       if (aff.isDirect) {
         directDeposit += aff.totalExpectedDeposit;
+        directPaidDeposit += aff.paidExpectedDeposit;
+        directRemainingDeposit += aff.remainingExpectedDeposit;
+        directPaidStaffCount += aff.paidStaffCount;
+        directUnpaidStaffCount += aff.unpaidStaffCount;
         directStaffCount += aff.staffList.length;
       } else {
         delegatedDeposit += aff.totalExpectedDeposit;
+        delegatedPaidDeposit += aff.paidExpectedDeposit;
+        delegatedRemainingDeposit += aff.remainingExpectedDeposit;
+        delegatedPaidStaffCount += aff.paidStaffCount;
+        delegatedUnpaidStaffCount += aff.unpaidStaffCount;
         delegatedStaffCount += aff.staffList.length;
       }
     });
@@ -578,13 +594,98 @@ export function SettlementView({
       paidStaffCount,
       unpaidStaffCount,
       directDeposit,
+      directPaidDeposit,
+      directRemainingDeposit,
+      directPaidStaffCount,
+      directUnpaidStaffCount,
       delegatedDeposit,
+      delegatedPaidDeposit,
+      delegatedRemainingDeposit,
+      delegatedPaidStaffCount,
+      delegatedUnpaidStaffCount,
       totalStaffCount,
       directStaffCount,
       delegatedStaffCount,
       totalDispatches,
     };
   }, [affiliationGroups]);
+
+  // 직속/위탁 소계 카드용: 입금 완료 / 남은 금액 분할 + 입금율 바 (전체 카드와 같은 구성, 밝은 배경 버전)
+  const renderPaidRemainingSplit = (
+    total: number,
+    paid: number,
+    remaining: number,
+    paidCount: number,
+    unpaidCount: number,
+    borderClass: string,
+  ) => (
+    <div className={cn("mt-2.5 pt-2.5 border-t", borderClass)}>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="bg-white/80 border border-emerald-300/70 rounded-xl p-2 flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[10px] font-bold text-emerald-700 flex items-center gap-1 whitespace-nowrap">
+              <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+              입금 완료
+            </span>
+            <span className="text-[9.5px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-300/70 whitespace-nowrap">
+              {paidCount}명
+            </span>
+          </div>
+          <div className="mt-1">
+            <div className="text-sm sm:text-base font-black text-emerald-700 tracking-tight whitespace-nowrap">
+              {(paid / 10000).toFixed(1)}
+              <span className="text-[10px] font-bold ml-0.5 text-emerald-600">만원</span>
+            </div>
+            <div className="text-[9.5px] text-stone-500 font-medium whitespace-nowrap">
+              ({paid.toLocaleString()}원)
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white/80 border border-amber-300/70 rounded-xl p-2 flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[10px] font-bold text-amber-700 flex items-center gap-1 whitespace-nowrap">
+              <Clock className="w-3 h-3 text-amber-600 shrink-0" />
+              남은 금액
+            </span>
+            <span className="text-[9.5px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-300/70 whitespace-nowrap">
+              {unpaidCount}명
+            </span>
+          </div>
+          <div className="mt-1">
+            <div className="text-sm sm:text-base font-black text-amber-700 tracking-tight whitespace-nowrap">
+              {(remaining / 10000).toFixed(1)}
+              <span className="text-[10px] font-bold ml-0.5 text-amber-600">만원</span>
+            </div>
+            <div className="text-[9.5px] text-stone-500 font-medium whitespace-nowrap">
+              ({remaining.toLocaleString()}원)
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {total > 0 && (
+        <div className="mt-2">
+          <div className="flex justify-between items-center text-[9.5px] text-stone-500 mb-1 font-medium">
+            <span className="text-emerald-700 font-bold">
+              입금율 {Math.round((paid / total) * 100)}%
+            </span>
+            <span>잔여 {Math.round((remaining / total) * 100)}%</span>
+          </div>
+          <div className="w-full h-1.5 bg-stone-200/80 rounded-full overflow-hidden flex">
+            <div
+              className="bg-emerald-500 h-full transition-all duration-300"
+              style={{ width: `${Math.min(100, Math.max(0, (paid / total) * 100))}%` }}
+            />
+            <div
+              className="bg-amber-400/80 h-full transition-all duration-300"
+              style={{ width: `${Math.min(100, Math.max(0, (remaining / total) * 100))}%` }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   // Delegated-only groups for quick agency view
   const delegatedGroups = useMemo(() => {
@@ -840,6 +941,14 @@ export function SettlementView({
               {grandTotals.directDeposit.toLocaleString()}원
             </div>
           </div>
+          {renderPaidRemainingSplit(
+            grandTotals.directDeposit,
+            grandTotals.directPaidDeposit,
+            grandTotals.directRemainingDeposit,
+            grandTotals.directPaidStaffCount,
+            grandTotals.directUnpaidStaffCount,
+            "border-amber-200/60",
+          )}
           <div className="text-[10px] text-amber-600/90 font-medium mt-2 pt-2 border-t border-amber-200/60 whitespace-nowrap">
             하퍼: 지급액 - 20,000원 / 커피: 지급액 그대로
           </div>
@@ -869,6 +978,14 @@ export function SettlementView({
               {grandTotals.delegatedDeposit.toLocaleString()}원
             </div>
           </div>
+          {renderPaidRemainingSplit(
+            grandTotals.delegatedDeposit,
+            grandTotals.delegatedPaidDeposit,
+            grandTotals.delegatedRemainingDeposit,
+            grandTotals.delegatedPaidStaffCount,
+            grandTotals.delegatedUnpaidStaffCount,
+            "border-purple-200/60",
+          )}
           <div className="text-[10px] text-purple-600/90 font-medium mt-2 pt-2 border-t border-purple-200/60 whitespace-nowrap">
             6자 형식 (수금액 - 30,000원 + 팁)
           </div>
