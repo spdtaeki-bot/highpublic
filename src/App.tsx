@@ -658,6 +658,43 @@ export default function App() {
     handleFocusStaffRecord(staffName);
   };
 
+  // 하단 직원 검색창 전용: 파견 기록이 아니라 "인원 현황" 안의 직원 카드로 포커싱
+  const handleFocusStaffCard = (staffName: string) => {
+    setHighlightedStaffColumn(staffName);
+    setTimeout(() => setHighlightedStaffColumn(null), 3000);
+
+    const scrollToCard = () => {
+      const staffCard = document.getElementById(`staff-card-${staffName}`);
+      if (staffCard) {
+        staffCard.scrollIntoView({
+          behavior: "auto",
+          block: "center",
+          inline: "center",
+        });
+        return true;
+      }
+      return false;
+    };
+
+    if (scrollToCard()) {
+      requestAnimationFrame(scrollToCard);
+      return;
+    }
+
+    // 인원 현황에는 오늘 출근한 직원만 표시되므로, 카드가 없으면 미출근 상태
+    const attendanceSection = document.getElementById("attendance-status-section");
+    if (attendanceSection) {
+      attendanceSection.scrollIntoView({ behavior: "auto", block: "start" });
+    }
+    const target = staff.find((s) => isSameStaffIdentity(s.name, staffName));
+    const isOff = !!(target?.id && offStaffIds.includes(target.id));
+    setAlertConfig({
+      message: isOff
+        ? `${staffName} 님은 퇴근 처리되어 인원 현황에 표시되지 않습니다.`
+        : `${staffName} 님은 오늘 출근 처리되지 않아 인원 현황에 표시되지 않습니다.`,
+    });
+  };
+
   const handleFocusStaffRecord = (staffName: string) => {
     if (viewMode !== "list") {
       setViewMode("list");
@@ -4236,7 +4273,7 @@ export default function App() {
                 staff={staff}
                 workingStaffIds={workingStaffIds}
                 offStaffIds={offStaffIds}
-                onFocusStaff={handleFocusStaff}
+                onFocusStaff={handleFocusStaffCard}
               />
 
               {capturingGroupText && (
