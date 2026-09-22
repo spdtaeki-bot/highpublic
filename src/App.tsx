@@ -16,6 +16,7 @@ import {
   Calendar,
   Users,
   Building2,
+  Store,
   Clock,
   DollarSign,
   Trash2,
@@ -981,79 +982,12 @@ export default function App() {
         }
       });
 
-      const executeGeneralBounce = async () => {
-        try {
-          // If all staff have ongoing dispatch boxes, bounce them immediately using their ongoing dispatch box
-          if (staffWithoutOngoing.length === 0) {
-            const promises: Promise<any>[] = [];
-            for (const item of staffWithOngoing) {
-              const recStart = item.record.startTime.toDate
-                ? item.record.startTime.toDate()
-                : new Date(item.record.startTime);
-              const timeStr = format(recStart, "HH:mm");
-              promises.push(
-                addBouncedRecord({
-                  staffName: item.staffName,
-                  establishmentName: item.record.establishmentName || "미정",
-                  time: timeStr,
-                  date: selectedDate,
-                }),
-              );
-              if (item.record.id) {
-                promises.push(deleteDispatch(item.record.id));
-              }
-            }
-            await Promise.all(promises);
-          } else {
-            // If there are staff without ongoing dispatch boxes, open modal to input establishment name
-            setBounceModalConfig({
-              isOpen: true,
-              staffWithOngoing,
-              staffWithoutOngoing,
-            });
-          }
-        } catch (error) {
-          console.error("일괄 튕김 처리 오류:", error);
-          setAlertConfig({ message: "일괄 튕김 처리 중 오류가 발생했습니다." });
-        }
-      };
-
-      // Check if any ongoing dispatch box has been running for 10 minutes or more
-      const now = currentTime || new Date();
-      const overTenMinStaff = staffWithOngoing.filter((item) => {
-        const recStart = item.record.startTime.toDate
-          ? item.record.startTime.toDate()
-          : new Date(item.record.startTime);
-        const diffMinutes = Math.floor((now.getTime() - recStart.getTime()) / (60 * 1000));
-        return diffMinutes >= 10;
+      // 첫 클릭에서 항상 튕김 모달을 연다. 실제 기록 변경은 모달의 완료 버튼을 눌렀을 때만 실행한다.
+      setBounceModalConfig({
+        isOpen: true,
+        staffWithOngoing,
+        staffWithoutOngoing,
       });
-
-      if (overTenMinStaff.length > 0) {
-        const staffDetails = overTenMinStaff
-          .map((item) => {
-            const recStart = item.record.startTime.toDate
-              ? item.record.startTime.toDate()
-              : new Date(item.record.startTime);
-            const diffMinutes = Math.max(
-              0,
-              Math.floor((now.getTime() - recStart.getTime()) / (60 * 1000)),
-            );
-            const startStr = format(recStart, "HH:mm");
-            return `• ${item.staffName} (${item.record.establishmentName || "가게명 없음"}): ${startStr} 시작 (${diffMinutes}분 경과)`;
-          })
-          .join("\n");
-
-        setAlertConfig({
-          message: `⚠️ 현재 진행 중인 업무가 10분 이상 경과된 직원이 포함되어 있습니다.\n잘못 선택된 업무박스가 아닌지 확인해주세요.\n\n${staffDetails}\n\n그래도 튕김 처리를 진행하시겠습니까?`,
-          actionLabel: "튕김 계속 진행",
-          onAction: () => {
-            executeGeneralBounce();
-          },
-        });
-        return;
-      }
-
-      await executeGeneralBounce();
     } catch (error) {
       console.error("일괄 튕김 처리 오류:", error);
       setAlertConfig({ message: "일괄 튕김 처리 중 오류가 발생했습니다." });
@@ -4347,21 +4281,9 @@ function StatusStaffModal({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [isBounceConfirming, setIsBounceConfirming] = useState(false);
-  const bounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const longPressTimer = useRef<NodeJS.Timeout | null>(null);
   const touchPos = useRef<{ x: number; y: number } | null>(null);
   const isScrolling = useRef(false);
-
-  useEffect(() => {
-    if (!isOpen || !isSelectionMode || selectedIds.size === 0) {
-      setIsBounceConfirming(false);
-      if (bounceTimerRef.current) {
-        clearTimeout(bounceTimerRef.current);
-        bounceTimerRef.current = null;
-      }
-    }
-  }, [isOpen, isSelectionMode, selectedIds]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -5022,17 +4944,6 @@ function StatusStaffModal({
                   <button
                     type="button"
                     onClick={async () => {
-                      if (!isBounceConfirming) {
-                        setIsBounceConfirming(true);
-                        if (bounceTimerRef.current) clearTimeout(bounceTimerRef.current);
-                        bounceTimerRef.current = setTimeout(() => {
-                          setIsBounceConfirming(false);
-                        }, 3500);
-                        return;
-                      }
-
-                      if (bounceTimerRef.current) clearTimeout(bounceTimerRef.current);
-                      setIsBounceConfirming(false);
                       const names = staff
                         .filter((s) => selectedIds.has(s.id!))
                         .map((s) => s.name);
@@ -5040,14 +4951,9 @@ function StatusStaffModal({
                       setIsSelectionMode(false);
                       setSelectedIds(new Set());
                     }}
-                    className={cn(
-                      "px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white cursor-pointer",
-                      isBounceConfirming
-                        ? "bg-rose-700 ring-2 ring-rose-400 animate-pulse font-black"
-                        : "bg-rose-600 hover:bg-rose-700",
-                    )}
+                    className="px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white cursor-pointer bg-rose-600 hover:bg-rose-700"
                   >
-                    {isBounceConfirming ? "한 번 더 누르면 튕김" : "튕김"}
+                    튕김
                   </button>
                 )}
 
@@ -5976,25 +5882,12 @@ function useMultiSelect(
   activeChoices?: Record<string, ActiveChoice>,
 ) {
   const [multiSelected, setMultiSelected] = useState<string[]>([]);
-  const [isBounceConfirming, setIsBounceConfirming] = useState(false);
-  const bounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const pressTimer = useRef<NodeJS.Timeout | null>(null);
   const isLongPress = useRef(false);
-
-  useEffect(() => {
-    if (multiSelected.length === 0) {
-      setIsBounceConfirming(false);
-      if (bounceTimerRef.current) {
-        clearTimeout(bounceTimerRef.current);
-        bounceTimerRef.current = null;
-      }
-    }
-  }, [multiSelected]);
 
   const startPress = (name: string) => {
     isLongPress.current = false;
     pressTimer.current = setTimeout(() => {
-      setIsBounceConfirming(false);
       isLongPress.current = true;
       setMultiSelected((prev) =>
         prev.includes(name) ? prev : [...prev, name],
@@ -6017,7 +5910,6 @@ function useMultiSelect(
     if (isLongPress.current) return;
 
     if (multiSelected.length > 0) {
-      setIsBounceConfirming(false);
       setMultiSelected((prev) =>
         prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name],
       );
@@ -6027,11 +5919,6 @@ function useMultiSelect(
   };
 
   const clearSelection = () => {
-    setIsBounceConfirming(false);
-    if (bounceTimerRef.current) {
-      clearTimeout(bounceTimerRef.current);
-      bounceTimerRef.current = null;
-    }
     setMultiSelected([]);
   };
 
@@ -6123,28 +6010,12 @@ function useMultiSelect(
           <button
             type="button"
             onClick={async () => {
-              if (!isBounceConfirming) {
-                setIsBounceConfirming(true);
-                if (bounceTimerRef.current) clearTimeout(bounceTimerRef.current);
-                bounceTimerRef.current = setTimeout(() => {
-                  setIsBounceConfirming(false);
-                }, 3500);
-                return;
-              }
-
-              if (bounceTimerRef.current) clearTimeout(bounceTimerRef.current);
-              setIsBounceConfirming(false);
               await onBounce(multiSelected);
               clearSelection();
             }}
-            className={cn(
-              "px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1",
-              isBounceConfirming
-                ? "bg-rose-700 ring-2 ring-rose-400 animate-pulse font-black"
-                : "bg-rose-600 hover:bg-rose-700",
-            )}
+            className="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1 bg-rose-600 hover:bg-rose-700"
           >
-            {isBounceConfirming ? "한 번 더 누르면 튕김" : "튕김"}
+            튕김
           </button>
         )}
 
@@ -10701,11 +10572,14 @@ function BounceEstablishmentModal({
   bouncedRecords?: BouncedRecord[];
   onConfirm: (establishmentName: string, time: string) => Promise<void>;
 }) {
-  const [establishmentName, setEstablishmentName] = useState("");
+  const [establishmentName, setEstablishmentName] = useState(
+    staffWithoutOngoing.length === 0 && staffWithOngoing.length > 0
+      ? staffWithOngoing[0].record.establishmentName || ""
+      : "",
+  );
   const [time, setTime] = useState(format(new Date(), "HH:mm"));
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Collect all known establishment names across establishments master, dispatch records, and bounced records
@@ -10726,21 +10600,12 @@ function BounceEstablishmentModal({
   const filteredEstablishments = useMemo(() => {
     const query = establishmentName.trim().toLowerCase();
     if (!query) {
-      return allKnownEstablishmentNames.slice(0, 15);
+      return allKnownEstablishmentNames.slice(0, 10);
     }
     return allKnownEstablishmentNames
       .filter((name) => name.toLowerCase().includes(query))
-      .slice(0, 20);
+      .slice(0, 10);
   }, [allKnownEstablishmentNames, establishmentName]);
-
-  const handleTimeChange = (val: string) => {
-    const digits = val.replace(/\D/g, "").slice(0, 4);
-    let formatted = digits;
-    if (digits.length >= 3) {
-      formatted = digits.slice(0, 2) + ":" + digits.slice(2);
-    }
-    setTime(formatted);
-  };
 
   const adjustMinutes = (deltaMinutes: number) => {
     const [hStr, mStr] = time.includes(":")
@@ -10758,7 +10623,7 @@ function BounceEstablishmentModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!establishmentName.trim()) {
+    if (staffWithoutOngoing.length > 0 && !establishmentName.trim()) {
       setError("가게명을 입력해주세요.");
       return;
     }
@@ -10784,91 +10649,109 @@ function BounceEstablishmentModal({
       className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
     >
       <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        initial={{ opacity: 0, scale: 0.95, y: 15 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        exit={{ opacity: 0, scale: 0.95, y: 15 }}
         onClick={(e) => e.stopPropagation()}
-        className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden border border-stone-100"
+        className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden border border-rose-100"
       >
-        <div className="p-4 bg-rose-50/70 border-b border-rose-100 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center font-black">
+        <div className="p-5 border-b border-rose-100/60 bg-gradient-to-r from-rose-900 via-red-900 to-stone-900 text-white flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-2xl bg-white/10 backdrop-blur-xs flex items-center justify-center text-rose-300 border border-white/10 shadow-inner">
               <XCircle className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-black text-stone-900">
-                튕김 처리 (가게명 입력)
+              <h3 className="text-base font-black tracking-tight text-white flex items-center gap-1.5">
+                튕김 설정
+                <span className="text-xs px-2 py-0.5 rounded-full bg-rose-500/30 text-rose-200 border border-rose-400/30 font-extrabold">
+                  {staffWithOngoing.length + staffWithoutOngoing.length}명
+                </span>
               </h3>
-              <p className="text-[10px] text-stone-500 font-bold">
-                진행 중인 업무가 없는 직원의 튕김 가게명을 입력하세요
+              <p className="text-[11px] text-rose-200/80 font-medium">
+                튕김 처리할 가게와 시간을 지정해주세요.
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1 text-stone-400 hover:text-stone-900 rounded-lg transition-colors cursor-pointer"
+            className="p-1.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            <Plus className="w-5 h-5 rotate-45" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-4 space-y-3.5">
-          {error && (
-            <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold rounded-xl flex items-center gap-1.5">
-              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-              <span>{error}</span>
-            </div>
-          )}
-
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
           {/* Selected Staff Breakdown */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-black text-stone-600 block">
-              대상 직원 ({staffWithOngoing.length + staffWithoutOngoing.length}명)
+            <label className="text-[11px] font-black text-stone-500 uppercase tracking-wider flex items-center gap-1">
+              <Users className="w-3.5 h-3.5 text-rose-600" />
+              <span>선택된 직원 ({staffWithOngoing.length + staffWithoutOngoing.length}명)</span>
             </label>
-            <div className="p-2.5 bg-stone-50 rounded-xl border border-stone-200 space-y-1.5 max-h-32 overflow-y-auto">
+            <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-2 bg-stone-50 rounded-2xl border border-stone-200/70">
               {staffWithOngoing.length > 0 && (
-                <div>
-                  <div className="text-[9px] font-black text-emerald-700 mb-0.5">
-                    진행 중 업무 튕김 (기존 가게명 자동 적용):
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {staffWithOngoing.map((item) => (
-                      <span
-                        key={item.staffName}
-                        className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded border border-emerald-200"
-                      >
-                        {item.staffName} ({item.record.establishmentName})
+                staffWithOngoing.map((item) => {
+                  const { main4, affiliation } = formatStaffNameComponents(item.staffName);
+                  return (
+                    <div
+                      key={item.staffName}
+                      className="flex items-center gap-1 bg-white border border-rose-200/80 text-stone-800 px-2 py-1 rounded-xl text-xs font-black shadow-2xs"
+                      title={`진행 중: ${item.record.establishmentName || "가게명 없음"} (기존 가게·시간 적용)`}
+                    >
+                      <span>{main4}</span>
+                      {affiliation && (
+                        <span
+                          className={cn(
+                            "px-1 py-0.25 rounded text-[9px] font-black text-white leading-none",
+                            affiliation === "직속" ? "bg-amber-500" : "bg-purple-600",
+                          )}
+                        >
+                          {affiliation}
+                        </span>
+                      )}
+                      <span className="text-[9px] text-emerald-700 bg-emerald-50 px-1 rounded">
+                        진행중
                       </span>
-                    ))}
-                  </div>
-                </div>
+                    </div>
+                  );
+                })
               )}
 
-              {staffWithoutOngoing.length > 0 && (
-                <div>
-                  <div className="text-[9px] font-black text-rose-700 mb-0.5">
-                    대기/미진행 튕김 (아래 입력 가게명 적용):
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {staffWithoutOngoing.map((name) => (
+              {staffWithoutOngoing.map((name) => {
+                const { main4, affiliation } = formatStaffNameComponents(name);
+                return (
+                  <div
+                    key={name}
+                    className="flex items-center gap-1 bg-white border border-rose-200/80 text-stone-800 px-2 py-1 rounded-xl text-xs font-black shadow-2xs"
+                  >
+                    <span>{main4}</span>
+                    {affiliation && (
                       <span
-                        key={name}
-                        className="px-1.5 py-0.5 bg-rose-100 text-rose-800 text-[10px] font-bold rounded border border-rose-200"
+                        className={cn(
+                          "px-1 py-0.25 rounded text-[9px] font-black text-white leading-none",
+                          affiliation === "직속" ? "bg-amber-500" : "bg-purple-600",
+                        )}
                       >
-                        {name}
+                        {affiliation}
                       </span>
-                    ))}
+                    )}
                   </div>
-                </div>
-              )}
+                );
+              })}
             </div>
+            {staffWithOngoing.length > 0 && (
+              <p className="text-[10px] font-bold text-emerald-700">
+                진행 중 직원은 기존 업무의 가게명과 시작 시간이 자동 적용됩니다.
+              </p>
+            )}
           </div>
 
           {/* Establishment Name Input with Autocomplete */}
-          <div className="space-y-1 relative">
-            <label className="text-[11px] font-black text-stone-700 block">
-              가게명 <span className="text-rose-500">*</span>
+          <div className="space-y-1.5 relative">
+            <label className="text-[11px] font-black text-stone-500 uppercase tracking-wider flex items-center gap-1">
+              <Store className="w-3.5 h-3.5 text-rose-600" />
+              <span>튕김 가게명</span>
+              <span className="text-red-500">*</span>
             </label>
             <div className="relative">
               <input
@@ -10877,92 +10760,45 @@ function BounceEstablishmentModal({
                 value={establishmentName}
                 onChange={(e) => {
                   setEstablishmentName(e.target.value);
-                  setIsDropdownOpen(true);
                   if (error) setError(null);
                 }}
-                onFocus={(e) => {
-                  setIsDropdownOpen(true);
-                  e.target.select();
-                }}
-                onClick={(e) => {
-                  (e.target as HTMLInputElement).select();
-                }}
-                onBlur={() => {
-                  setTimeout(() => setIsDropdownOpen(false), 200);
-                }}
-                onKeyDown={(e) => {
-                  if (
-                    e.key === "Enter" &&
-                    isDropdownOpen &&
-                    filteredEstablishments.length > 0
-                  ) {
-                    e.preventDefault();
-                    setEstablishmentName(filteredEstablishments[0]);
-                    setIsDropdownOpen(false);
-                  } else if (e.key === "Escape") {
-                    setIsDropdownOpen(false);
-                  }
-                }}
-                placeholder="튕김 처리할 가게명을 입력하세요"
+                placeholder="가게 이름을 입력하거나 아래에서 선택하세요..."
                 autoFocus
                 autoComplete="off"
-                className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs font-bold focus:outline-hidden focus:ring-2 focus:ring-rose-500 focus:border-rose-500 transition-all pr-8"
+                className="w-full bg-stone-50 border border-stone-200 rounded-2xl pl-3.5 pr-8 py-3 text-sm font-black text-stone-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-600/30 focus:border-rose-600 transition-all placeholder:text-stone-400"
               />
               {establishmentName && (
                 <button
                   type="button"
                   onClick={() => {
                     setEstablishmentName("");
-                    setIsDropdownOpen(true);
                     inputRef.current?.focus();
                   }}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-stone-400 hover:text-stone-700 cursor-pointer"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-stone-600 rounded-full cursor-pointer"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
 
-            {/* Dropdown list for autocomplete */}
-            {isDropdownOpen && filteredEstablishments.length > 0 && (
-              <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-stone-200 rounded-xl shadow-xl z-[100] max-h-44 overflow-y-auto divide-y divide-stone-100">
-                <div className="px-3 py-1 bg-stone-50 text-[9px] font-black text-stone-400 uppercase tracking-wider sticky top-0 flex items-center justify-between">
-                  <span>이전 가게 목록 ({filteredEstablishments.length})</span>
-                  <span>선택 시 자동입력</span>
-                </div>
+            {/* Quick Suggestions - 초이스 모달과 동일한 구성 */}
+            {filteredEstablishments.length > 0 && (
+              <div className="flex flex-wrap justify-end gap-1 pt-1 max-h-24 overflow-y-auto">
                 {filteredEstablishments.map((name) => (
-                  <button
-                    key={name}
-                    type="button"
-                    onMouseDown={(ev) => {
-                      ev.preventDefault();
-                      setEstablishmentName(name);
-                      setIsDropdownOpen(false);
-                      if (error) setError(null);
-                    }}
-                    className="w-full text-left px-3 py-2 text-xs font-bold text-stone-800 hover:bg-rose-50 hover:text-rose-700 transition-colors flex items-center justify-between cursor-pointer"
-                  >
-                    <span>{name}</span>
-                    <span className="text-[10px] text-stone-300 group-hover:text-rose-400">
-                      선택
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Quick establishment chips */}
-            {!isDropdownOpen && allKnownEstablishmentNames.length > 0 && (
-              <div className="flex items-center gap-1 overflow-x-auto py-1 scrollbar-hide">
-                {allKnownEstablishmentNames.slice(0, 8).map((name) => (
                   <button
                     type="button"
                     key={name}
                     onClick={() => {
                       setEstablishmentName(name);
+                      inputRef.current?.blur();
                       if (error) setError(null);
                     }}
-                    className="px-2 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 text-[10px] font-bold rounded-lg shrink-0 transition-colors cursor-pointer"
+                    className={cn(
+                      "px-2 py-1 rounded-lg text-[11px] font-extrabold border transition-all cursor-pointer",
+                      establishmentName === name
+                        ? "bg-rose-600 text-white border-rose-600 shadow-xs"
+                        : "bg-stone-50 text-stone-600 border-stone-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200",
+                    )}
                   >
                     {name}
                   </button>
@@ -10972,77 +10808,90 @@ function BounceEstablishmentModal({
           </div>
 
           {/* Time Input with Direct Click Selection & +1/-1 Buttons */}
-          <div className="space-y-1">
-            <label className="text-[11px] font-black text-stone-700 block">
-              튕김 시간
-            </label>
-            <div className="flex items-center gap-1.5">
-              <div className="relative flex-1">
-                <input
-                  type="text"
-                  value={time}
-                  onChange={(e) => handleTimeChange(e.target.value)}
-                  onFocus={(e) => {
-                    e.target.select();
-                  }}
-                  onClick={(e) => {
-                    (e.target as HTMLInputElement).select();
-                  }}
-                  placeholder="HH:mm"
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm font-black text-stone-900 focus:outline-hidden focus:ring-2 focus:ring-rose-500 focus:border-rose-500 transition-all text-center tracking-wider"
-                />
-              </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => adjustMinutes(-1)}
-                  className="px-3 py-2 bg-stone-100 hover:bg-stone-200 active:scale-95 text-stone-700 text-xs font-black rounded-xl border border-stone-200 transition-all cursor-pointer shadow-2xs"
-                  title="1분 감소"
-                >
-                  -1
-                </button>
-                <button
-                  type="button"
-                  onClick={() => adjustMinutes(1)}
-                  className="px-3 py-2 bg-stone-100 hover:bg-stone-200 active:scale-95 text-stone-700 text-xs font-black rounded-xl border border-stone-200 transition-all cursor-pointer shadow-2xs"
-                  title="1분 증가"
-                >
-                  +1
-                </button>
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-black text-stone-500 uppercase tracking-wider flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5 text-rose-600" />
+                <span>튕김 시간</span>
+                <span className="text-red-500">*</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => setTime(format(new Date(), "HH:mm"))}
+                className="text-[10px] font-black text-rose-600 hover:text-rose-800 px-1.5 py-0.5 rounded bg-rose-50 hover:bg-rose-100 transition-all cursor-pointer"
+              >
+                현시간 적용
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="time"
+                value={time}
+                onChange={(e) => setTime(e.target.value)}
+                className="flex-1 bg-stone-50 border border-stone-200 rounded-2xl px-3.5 py-3 text-sm font-black text-stone-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-600/30 focus:border-rose-600 transition-all font-mono"
+              />
+              <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => adjustMinutes(-5)}
-                  className="px-2 py-2 bg-stone-50 hover:bg-stone-100 active:scale-95 text-stone-500 text-[11px] font-bold rounded-xl border border-stone-200 transition-all cursor-pointer"
-                  title="5분 감소"
+                  className="px-2 py-2.5 bg-stone-100 hover:bg-stone-200 active:scale-95 text-stone-700 text-[11px] font-black rounded-xl transition-all cursor-pointer"
+                  title="5분 전"
                 >
-                  -5
+                  -5분
                 </button>
                 <button
                   type="button"
                   onClick={() => adjustMinutes(5)}
-                  className="px-2 py-2 bg-stone-50 hover:bg-stone-100 active:scale-95 text-stone-500 text-[11px] font-bold rounded-xl border border-stone-200 transition-all cursor-pointer"
-                  title="5분 증가"
+                  className="px-2 py-2.5 bg-stone-100 hover:bg-stone-200 active:scale-95 text-stone-700 text-[11px] font-black rounded-xl transition-all cursor-pointer"
+                  title="5분 후"
                 >
-                  +5
+                  +5분
+                </button>
+                <button
+                  type="button"
+                  onClick={() => adjustMinutes(-1)}
+                  className="px-2 py-2.5 bg-stone-100 hover:bg-stone-200 active:scale-95 text-stone-700 text-[11px] font-black rounded-xl transition-all cursor-pointer"
+                  title="1분 전"
+                >
+                  -1분
+                </button>
+                <button
+                  type="button"
+                  onClick={() => adjustMinutes(1)}
+                  className="px-2 py-2.5 bg-stone-100 hover:bg-stone-200 active:scale-95 text-stone-700 text-[11px] font-black rounded-xl transition-all cursor-pointer"
+                  title="1분 후"
+                >
+                  +1분
                 </button>
               </div>
             </div>
           </div>
 
+          {error && (
+            <div className="p-2.5 bg-red-50 border border-red-200 rounded-xl text-xs font-bold text-red-600 text-center animate-shake">
+              {error}
+            </div>
+          )}
+
           <div className="flex items-center gap-2 pt-2 border-t border-stone-100">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-black rounded-xl transition-all active:scale-95 cursor-pointer"
+              className="flex-1 py-3 bg-stone-100 hover:bg-stone-200 text-stone-700 font-black text-xs rounded-2xl transition-all active:scale-95 cursor-pointer"
             >
               취소
             </button>
             <button
               type="submit"
               disabled={isSubmitting}
-              className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-black rounded-xl shadow-lg shadow-rose-200 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
+              className="flex-[2] py-3 bg-gradient-to-r from-rose-700 to-red-700 hover:from-rose-800 hover:to-red-800 text-white font-black text-xs rounded-2xl shadow-lg shadow-rose-200 active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center gap-1.5 cursor-pointer"
             >
-              {isSubmitting ? "처리 중..." : "튕김 완료"}
+              <Check className="w-4 h-4" />
+              <span>
+                {isSubmitting
+                  ? "처리 중..."
+                  : `튕김 처리 (${staffWithOngoing.length + staffWithoutOngoing.length}명)`}
+              </span>
             </button>
           </div>
         </form>

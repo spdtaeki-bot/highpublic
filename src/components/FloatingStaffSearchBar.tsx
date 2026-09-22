@@ -1,5 +1,14 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
-import { Search, X, User, CheckCircle2, LogOut, CircleDot, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  Search,
+  X,
+  CheckCircle2,
+  LogOut,
+  CircleDot,
+  ChevronDown,
+  Users,
+  Activity,
+} from "lucide-react";
 import { Staff } from "../types";
 
 interface FloatingStaffSearchBarProps {
@@ -72,6 +81,27 @@ export function FloatingStaffSearchBar({
     inputRef.current?.focus();
   };
 
+  const focusSection = (sectionId: string) => {
+    setIsOpen(false);
+    const section = document.getElementById(sectionId);
+    if (!section) return;
+
+    const targetTop = Math.max(
+      0,
+      section.getBoundingClientRect().top + window.scrollY - 80,
+    );
+    document.documentElement.scrollTop = targetTop;
+    document.body.scrollTop = targetTop;
+    section.animate(
+      [
+        { boxShadow: "0 0 0 0 rgba(16, 185, 129, 0)" },
+        { boxShadow: "0 0 0 4px rgba(16, 185, 129, 0.45)" },
+        { boxShadow: "0 0 0 0 rgba(16, 185, 129, 0)" },
+      ],
+      { duration: 500, easing: "ease-out" },
+    );
+  };
+
   if (isMinimized) {
     return (
       <div className="fixed bottom-4 right-4 z-40">
@@ -93,10 +123,10 @@ export function FloatingStaffSearchBar({
   return (
     <div
       ref={containerRef}
-      className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 w-[90%] max-w-sm sm:max-w-md transition-all duration-300"
+      className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 w-[calc(100%_-_1rem)] max-w-2xl transition-all duration-300"
     >
       {/* Search Bar Floating Card */}
-      <div className="bg-stone-900/95 text-white backdrop-blur-xl border border-stone-700/80 shadow-[0_12px_35px_rgba(0,0,0,0.4)] rounded-2xl p-2 flex items-center gap-2 relative">
+      <div className="bg-stone-900/95 text-white backdrop-blur-xl border border-stone-700/80 shadow-[0_12px_35px_rgba(0,0,0,0.4)] rounded-2xl p-2 flex items-center gap-1.5 sm:gap-2 relative">
         <div className="pl-2 shrink-0 flex items-center text-emerald-400">
           <Search className="w-4 h-4" />
         </div>
@@ -111,8 +141,8 @@ export function FloatingStaffSearchBar({
           }}
           onFocus={() => setIsOpen(true)}
           onKeyDown={handleKeyDown}
-          placeholder="직원 이름 검색 (인원현황 포커싱)..."
-          className="w-full bg-transparent text-sm font-bold text-white placeholder:text-stone-400 placeholder:font-medium focus:outline-none py-1"
+          placeholder="직원 이름 검색..."
+          className="min-w-0 flex-1 bg-transparent text-xs sm:text-sm font-bold text-white placeholder:text-stone-400 placeholder:font-medium focus:outline-none py-1"
         />
 
         {searchTerm && (
@@ -124,6 +154,28 @@ export function FloatingStaffSearchBar({
             <X className="w-4 h-4" />
           </button>
         )}
+
+        <div className="h-4 w-[1px] bg-stone-700 shrink-0" />
+
+        <button
+          type="button"
+          onClick={() => focusSection("attendance-status-section")}
+          className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-blue-500/40 bg-blue-500/15 px-2 py-1.5 text-[10px] sm:text-xs font-black text-blue-300 hover:bg-blue-500/25 transition-colors active:scale-95 whitespace-nowrap"
+          title="인원 현황으로 이동"
+        >
+          <Users className="w-3.5 h-3.5" />
+          인원현황
+        </button>
+
+        <button
+          type="button"
+          onClick={() => focusSection("progress-status-section")}
+          className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-2 py-1.5 text-[10px] sm:text-xs font-black text-emerald-300 hover:bg-emerald-500/25 transition-colors active:scale-95 whitespace-nowrap"
+          title="진행 현황으로 이동"
+        >
+          <Activity className="w-3.5 h-3.5" />
+          진행현황
+        </button>
 
         <div className="h-4 w-[1px] bg-stone-700 shrink-0" />
 
