@@ -585,8 +585,68 @@ export default function App() {
   const [isBatchDelegatedProfitModalOpen, setIsBatchDelegatedProfitModalOpen] =
     useState(false);
   const [capturingGroupText, setCapturingGroupText] = useState<string | null>(null);
+  const [completedAllOffCaptures, setCompletedAllOffCaptures] = useState<
+    Record<string, true>
+  >(() => {
+    try {
+      return JSON.parse(
+        localStorage.getItem("office_all_off_group_captures") || "{}",
+      );
+    } catch {
+      return {};
+    }
+  });
   const [initError, setInitError] = useState<string | null>(null);
   const dateInputRef = useRef<HTMLInputElement>(null);
+
+  const getAllOffCaptureKey = (groupTitle: string, staffNames: string[]) => {
+    const staffState = staffNames
+      .map((name) => {
+        const target = staff.find((item) => item.name === name);
+        const offTime = target?.id ? offTimes[target.id] : undefined;
+        const offMillis = offTime?.toMillis
+          ? offTime.toMillis()
+          : offTime
+            ? new Date(offTime).getTime()
+            : 0;
+        return `${name}:${offMillis}`;
+      })
+      .sort()
+      .join("|");
+    return `${selectedDate}::${groupTitle}::${staffState}`;
+  };
+
+  const hasCompletedAllOffCapture = (
+    groupTitle: string,
+    staffNames: string[],
+  ) => !!completedAllOffCaptures[getAllOffCaptureKey(groupTitle, staffNames)];
+
+  const markAllOffCaptureCompleted = (
+    groupTitle: string,
+    staffNames: string[],
+  ) => {
+    const isAllOff =
+      staffNames.length > 0 &&
+      staffNames.every((name) => {
+        const target = staff.find((item) => item.name === name);
+        return !!(target?.id && offStaffIds.includes(target.id));
+      });
+    if (!isAllOff) return;
+
+    const key = getAllOffCaptureKey(groupTitle, staffNames);
+    setCompletedAllOffCaptures((previous) => {
+      const next = { ...previous, [key]: true as const };
+      try {
+        localStorage.setItem(
+          "office_all_off_group_captures",
+          JSON.stringify(next),
+        );
+      } catch (error) {
+        console.warn("캡쳐 완료 표시 저장 실패:", error);
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     // 로딩 타임아웃 설정 (15초)
@@ -1425,6 +1485,7 @@ export default function App() {
               text: `${selectedDate || format(new Date(), "yyyy-MM-dd")} ${groupTitle} 소속 (${capturedItems.length}명) 업무내역 공유`,
               files: [mergedFile],
             });
+            markAllOffCaptureCompleted(groupTitle, staffNames);
             setCapturingGroupText(null);
             return;
           }
@@ -1437,6 +1498,7 @@ export default function App() {
       link.download = filename;
       link.href = mergedDataUrl;
       link.click();
+      markAllOffCaptureCompleted(groupTitle, staffNames);
     } catch (err) {
       console.error("Group capture error:", err);
       setAlertConfig({ message: "소속 묶음 캡쳐 처리 중 오류가 발생했습니다." });
@@ -3023,6 +3085,9 @@ export default function App() {
                             <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5">
                               {Object.entries(overallAffCounts).map(([aff, data]) => {
                                 const isAllOff = data.remaining === 0;
+                                const isCapturedAfterAllOff =
+                                  isAllOff &&
+                                  hasCompletedAllOffCapture(aff, data.names);
                                 return (
                                   <button
                                     key={`overall-aff-${aff}`}
@@ -3034,9 +3099,11 @@ export default function App() {
                                         ? "bg-stone-400 hover:bg-stone-500 opacity-90"
                                         : aff === "직속"
                                           ? "bg-amber-500 hover:bg-amber-600 hover:opacity-95"
-                                          : "bg-purple-600 hover:bg-purple-700 hover:opacity-95"
+                                          : "bg-purple-600 hover:bg-purple-700 hover:opacity-95",
+                                      isCapturedAfterAllOff &&
+                                        "border-2 border-black ring-1 ring-black/30 ring-offset-1"
                                     )}
-                                    title={`${aff} 소속: 출근 ${data.total}명 중 ${data.off}명 퇴근 (현재 ${data.remaining}명 남음)${isAllOff ? " [전원 퇴근]" : ""} - 클릭 시 묶음 캡쳐`}
+                                    title={`${aff} 소속: 출근 ${data.total}명 중 ${data.off}명 퇴근 (현재 ${data.remaining}명 남음)${isAllOff ? " [전원 퇴근]" : ""}${isCapturedAfterAllOff ? " [퇴근 후 캡쳐 완료]" : ""} - 클릭 시 묶음 캡쳐`}
                                   >
                                     <div className="flex items-center gap-1 sm:gap-1.5 min-w-0">
                                       <Camera className="w-3 h-3 sm:w-3.5 sm:h-3.5 opacity-90 shrink-0" />
@@ -3096,6 +3163,12 @@ export default function App() {
 
                             const groupOffCount = list.filter((s) => offStaffIds.includes(s.id!)).length;
                             const groupRemainingCount = list.length - groupOffCount;
+                            const isGroupCapturedAfterAllOff =
+                              groupRemainingCount === 0 &&
+                              hasCompletedAllOffCapture(
+                                groupLabel,
+                                list.map((s) => s.name),
+                              );
 
                             return (
                               <div key={group} className="space-y-2">
@@ -3109,8 +3182,10 @@ export default function App() {
                                       groupRemainingCount === 0
                                         ? "text-stone-500 bg-stone-200 border border-stone-300/80"
                                         : groupColor,
+                                      isGroupCapturedAfterAllOff &&
+                                        "border-2 border-black ring-1 ring-black/30 ring-offset-1",
                                     )}
-                                    title={`${groupLabel} 소속: 출근 ${list.length}명 중 ${groupOffCount}명 퇴근 (현재 ${groupRemainingCount}명 남음)${groupRemainingCount === 0 ? " [전원 퇴근]" : ""} - 묶음 캡쳐`}
+                                    title={`${groupLabel} 소속: 출근 ${list.length}명 중 ${groupOffCount}명 퇴근 (현재 ${groupRemainingCount}명 남음)${groupRemainingCount === 0 ? " [전원 퇴근]" : ""}${isGroupCapturedAfterAllOff ? " [퇴근 후 캡쳐 완료]" : ""} - 묶음 캡쳐`}
                                   >
                                     <Camera className="w-3 h-3 sm:w-3.5 sm:h-3.5 opacity-80 shrink-0" />
                                     <span className="font-black text-xs sm:text-sm tracking-tight leading-none shrink-0">
@@ -3170,6 +3245,9 @@ export default function App() {
                                     if (entries.length === 0) return null;
                                     return entries.map(([aff, data]) => {
                                       const isAllOff = data.remaining === 0;
+                                      const isCapturedAfterAllOff =
+                                        isAllOff &&
+                                        hasCompletedAllOffCapture(aff, data.names);
                                       return (
                                         <button
                                           key={aff}
@@ -3181,9 +3259,11 @@ export default function App() {
                                               ? "bg-stone-400 hover:bg-stone-500 opacity-90"
                                               : aff === "직속"
                                                 ? "bg-amber-500 hover:bg-amber-600 hover:opacity-95"
-                                                : "bg-purple-600 hover:bg-purple-700 hover:opacity-95"
+                                                : "bg-purple-600 hover:bg-purple-700 hover:opacity-95",
+                                            isCapturedAfterAllOff &&
+                                              "border-2 border-black ring-1 ring-black/30 ring-offset-1"
                                           )}
-                                          title={`${aff} 소속: 출근 ${data.total}명 중 ${data.off}명 퇴근 (현재 ${data.remaining}명 남음)${isAllOff ? " [전원 퇴근]" : ""} - 묶음 캡쳐`}
+                                          title={`${aff} 소속: 출근 ${data.total}명 중 ${data.off}명 퇴근 (현재 ${data.remaining}명 남음)${isAllOff ? " [전원 퇴근]" : ""}${isCapturedAfterAllOff ? " [퇴근 후 캡쳐 완료]" : ""} - 묶음 캡쳐`}
                                         >
                                           <Camera className="w-3 h-3 opacity-90 shrink-0" />
                                           <span className="font-black text-xs tracking-tight leading-none shrink-0">
@@ -4872,7 +4952,7 @@ function StatusStaffModal({
                           setIsSelectionMode(false);
                           setSelectedIds(new Set());
                         }}
-                        className="bg-purple-700 hover:bg-purple-800 ring-1 ring-purple-400/50 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white flex items-center gap-1 cursor-pointer"
+                        className="order-2 bg-purple-700 hover:bg-purple-800 ring-1 ring-purple-400/50 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white flex items-center gap-1 cursor-pointer"
                         title="초이스 취소 (대기 상태로 복귀)"
                       >
                         <RotateCcw className="w-3 h-3 text-purple-200" />
@@ -4893,7 +4973,7 @@ function StatusStaffModal({
                         setSelectedIds(new Set());
                         onClose();
                       }}
-                      className="bg-purple-600 hover:bg-purple-700 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white flex items-center gap-1 cursor-pointer"
+                      className="order-2 bg-purple-600 hover:bg-purple-700 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white flex items-center gap-1 cursor-pointer"
                     >
                       <Sparkles className="w-3 h-3 text-purple-200" />
                       <span>초이스</span>
@@ -4914,7 +4994,7 @@ function StatusStaffModal({
                       setSelectedIds(new Set());
                       onClose();
                     }}
-                    className="bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white flex items-center gap-1 cursor-pointer"
+                    className="order-3 bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white flex items-center gap-1 cursor-pointer"
                   >
                     <Play className="w-3 h-3 text-emerald-200 fill-emerald-200" />
                     <span>진행</span>
@@ -4933,7 +5013,7 @@ function StatusStaffModal({
                       setIsSelectionMode(false);
                       setSelectedIds(new Set());
                     }}
-                    className="bg-stone-800 hover:bg-stone-700 border border-stone-600 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap active:scale-95 text-stone-100"
+                    className="order-1 bg-stone-800 hover:bg-stone-700 border border-stone-600 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap active:scale-95 text-stone-100"
                   >
                     퇴근
                   </button>
@@ -4951,7 +5031,7 @@ function StatusStaffModal({
                       setIsSelectionMode(false);
                       setSelectedIds(new Set());
                     }}
-                    className="px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white cursor-pointer bg-rose-600 hover:bg-rose-700"
+                    className="order-4 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white cursor-pointer bg-rose-600 hover:bg-rose-700"
                   >
                     튕김
                   </button>
@@ -4969,7 +5049,7 @@ function StatusStaffModal({
                       setIsSelectionMode(false);
                       setSelectedIds(new Set());
                     }}
-                    className="bg-red-500 hover:bg-red-600 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white"
+                    className="order-6 bg-red-500 hover:bg-red-600 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white"
                   >
                     종료
                   </button>
@@ -4980,7 +5060,7 @@ function StatusStaffModal({
                   type="button"
                   onClick={handleBulkAddRecord}
                   disabled={selectedIds.size === 0}
-                  className="bg-blue-500 hover:bg-blue-600 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white disabled:opacity-50"
+                  className="order-5 bg-blue-500 hover:bg-blue-600 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap shadow-sm active:scale-95 text-white disabled:opacity-50"
                 >
                   일괄 기록
                 </button>
@@ -4992,7 +5072,7 @@ function StatusStaffModal({
                     setIsSelectionMode(false);
                     setSelectedIds(new Set());
                   }}
-                  className="bg-stone-700 hover:bg-stone-600 text-stone-300 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap active:scale-95"
+                  className="order-7 bg-stone-700 hover:bg-stone-600 text-stone-300 px-3 py-1.5 rounded-xl font-bold transition-all text-xs whitespace-nowrap active:scale-95"
                 >
                   취소
                 </button>
@@ -5952,7 +6032,7 @@ function useMultiSelect(
                 }
                 clearSelection();
               }}
-              className="bg-purple-700 hover:bg-purple-800 ring-1 ring-purple-400/50 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1"
+              className="order-2 bg-purple-700 hover:bg-purple-800 ring-1 ring-purple-400/50 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1"
               title="초이스 취소 (대기 상태로 복귀)"
             >
               <RotateCcw className="w-3 h-3 text-purple-200 hidden sm:inline" />
@@ -5967,7 +6047,7 @@ function useMultiSelect(
                 }
                 clearSelection();
               }}
-              className="bg-purple-600 hover:bg-purple-700 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1"
+              className="order-2 bg-purple-600 hover:bg-purple-700 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1"
               title="초이스 등록"
             >
               <Sparkles className="w-3 h-3 text-purple-200 hidden sm:inline" />
@@ -5984,7 +6064,7 @@ function useMultiSelect(
               await onProgress(multiSelected);
               clearSelection();
             }}
-            className="bg-emerald-600 hover:bg-emerald-700 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1"
+            className="order-3 bg-emerald-600 hover:bg-emerald-700 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1"
           >
             <Play className="w-3 h-3 text-emerald-200 fill-emerald-200 hidden sm:inline" />
             <span>진행</span>
@@ -5999,7 +6079,7 @@ function useMultiSelect(
               await onToggleOff(multiSelected);
               clearSelection();
             }}
-            className="bg-stone-800 hover:bg-stone-700 border border-stone-600 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-stone-100 shrink-0 cursor-pointer"
+            className="order-1 bg-stone-800 hover:bg-stone-700 border border-stone-600 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-stone-100 shrink-0 cursor-pointer"
           >
             퇴근
           </button>
@@ -6013,7 +6093,7 @@ function useMultiSelect(
               await onBounce(multiSelected);
               clearSelection();
             }}
-            className="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1 bg-rose-600 hover:bg-rose-700"
+            className="order-4 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer flex items-center gap-1 bg-rose-600 hover:bg-rose-700"
           >
             튕김
           </button>
@@ -6027,7 +6107,7 @@ function useMultiSelect(
               await onFinish(multiSelected);
               clearSelection();
             }}
-            className="bg-red-500 hover:bg-red-600 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer"
+            className="order-6 bg-red-500 hover:bg-red-600 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer"
           >
             종료
           </button>
@@ -6040,7 +6120,7 @@ function useMultiSelect(
             onCompleteSelection(multiSelected);
             clearSelection();
           }}
-          className="bg-blue-500 hover:bg-blue-600 px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer"
+          className="order-5 bg-blue-500 hover:bg-blue-600 px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap shadow-sm active:scale-95 text-white shrink-0 cursor-pointer"
         >
           <span className="hidden sm:inline">일괄 기록</span>
           <span className="sm:hidden">일괄기록</span>
@@ -6050,7 +6130,7 @@ function useMultiSelect(
         <button
           type="button"
           onClick={clearSelection}
-          className="bg-stone-700 hover:bg-stone-600 text-stone-300 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap active:scale-95 shrink-0 cursor-pointer"
+          className="order-7 bg-stone-700 hover:bg-stone-600 text-stone-300 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl font-black transition-all text-[11px] sm:text-xs whitespace-nowrap active:scale-95 shrink-0 cursor-pointer"
         >
           취소
         </button>
