@@ -719,6 +719,37 @@ export default function App() {
     handleFocusStaffRecord(staffName);
   };
 
+  const handleViewModeNavigation = (
+    mode: "list" | "settlement" | "unpaid" | "stats",
+  ) => {
+    setViewMode(mode);
+
+    const jumpToViewContent = () => {
+      const section = document.getElementById("view-content-section");
+      if (!section) return;
+
+      const fixedHeaderOffset = window.innerWidth >= 640 ? 72 : 64;
+      const targetTop = Math.max(
+        0,
+        section.getBoundingClientRect().top +
+          window.scrollY -
+          fixedHeaderOffset,
+      );
+      document.documentElement.scrollTop = targetTop;
+      document.body.scrollTop = targetTop;
+    };
+
+    requestAnimationFrame(() => {
+      jumpToViewContent();
+      requestAnimationFrame(jumpToViewContent);
+    });
+
+    // Lazy-loaded views can initially be too short to reach the anchor.
+    // Re-apply the same instant jump after their layout has expanded.
+    window.setTimeout(jumpToViewContent, 120);
+    window.setTimeout(jumpToViewContent, 350);
+  };
+
   // 하단 직원 검색창 전용: 파견 기록이 아니라 "인원 현황" 안의 직원 카드로 포커싱
   const handleFocusStaffCard = (staffName: string) => {
     setHighlightedStaffColumn(staffName);
@@ -2422,6 +2453,70 @@ export default function App() {
                     </span>
                   </div>
 
+                  <div className="flex bg-stone-200/90 p-1 rounded-xl overflow-x-auto min-w-0 hide-scrollbar">
+                    <button
+                      type="button"
+                      onClick={() => handleViewModeNavigation("list")}
+                      className={cn(
+                        "px-2 sm:px-3 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0",
+                        viewMode === "list"
+                          ? "bg-white shadow-sm text-stone-900"
+                          : "text-stone-500 hover:text-stone-700",
+                      )}
+                    >
+                      리스트
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleViewModeNavigation("settlement")}
+                      className={cn(
+                        "px-2 sm:px-3 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0",
+                        viewMode === "settlement"
+                          ? "bg-indigo-600 shadow-sm text-white"
+                          : "text-stone-500 hover:text-stone-700",
+                      )}
+                    >
+                      정산
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleViewModeNavigation("unpaid")}
+                      className={cn(
+                        "px-2 sm:px-3 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all cursor-pointer flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0",
+                        viewMode === "unpaid"
+                          ? "bg-red-600 shadow-sm text-white"
+                          : "text-stone-500 hover:text-stone-700",
+                      )}
+                    >
+                      <span>총미수금 상세</span>
+                      {stats.unpaidAmount > 0 && (
+                        <span
+                          className={cn(
+                            "hidden sm:inline px-1.5 py-0.2 rounded-full text-[10px] font-black",
+                            viewMode === "unpaid"
+                              ? "bg-white text-red-700"
+                              : "bg-red-100 text-red-600",
+                          )}
+                        >
+                          {(stats.unpaidAmount / 10000).toLocaleString()}만
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleViewModeNavigation("stats")}
+                      className={cn(
+                        "px-2 sm:px-3 py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all cursor-pointer flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0",
+                        viewMode === "stats"
+                          ? "bg-violet-600 shadow-sm text-white"
+                          : "text-stone-500 hover:text-stone-700",
+                      )}
+                    >
+                      <BarChart3 className="hidden sm:block w-3.5 h-3.5" />
+                      <span>통계</span>
+                    </button>
+                  </div>
+
                   <div className="flex items-center gap-1 sm:gap-2 shrink-0">
                     <button
                       onClick={() => setIsStaffModalOpen(true)}
@@ -3784,7 +3879,10 @@ export default function App() {
                 </div>
 
                 {/* Actions */}
-                <div className="flex flex-col gap-4 mb-6">
+                <div
+                  id="view-content-section"
+                  className="flex flex-col gap-4 mb-6"
+                >
                   <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
                     <div className="flex items-center gap-4">
                       <h2 className="text-xl font-bold flex items-center gap-2">
@@ -3805,65 +3903,6 @@ export default function App() {
                               ? "총 미수금 상세"
                               : "직원 통계"}
                       </h2>
-                      <div className="flex bg-stone-200 p-1 rounded-xl">
-                        <button
-                          onClick={() => setViewMode("list")}
-                          className={cn(
-                            "px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer",
-                            viewMode === "list"
-                              ? "bg-white shadow-sm text-stone-900"
-                              : "text-stone-500 hover:text-stone-700",
-                          )}
-                        >
-                          리스트
-                        </button>
-                        <button
-                          onClick={() => setViewMode("settlement")}
-                          className={cn(
-                            "px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer",
-                            viewMode === "settlement"
-                              ? "bg-indigo-600 shadow-sm text-white"
-                              : "text-stone-500 hover:text-stone-700",
-                          )}
-                        >
-                          정산
-                        </button>
-                        <button
-                          onClick={() => setViewMode("unpaid")}
-                          className={cn(
-                            "px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5",
-                            viewMode === "unpaid"
-                              ? "bg-red-600 shadow-sm text-white"
-                              : "text-stone-500 hover:text-stone-700",
-                          )}
-                        >
-                          <span>총미수금 상세</span>
-                          {stats.unpaidAmount > 0 && (
-                            <span
-                              className={cn(
-                                "px-1.5 py-0.2 rounded-full text-[10px] font-black",
-                                viewMode === "unpaid"
-                                  ? "bg-white text-red-700"
-                                  : "bg-red-100 text-red-600",
-                              )}
-                            >
-                              {(stats.unpaidAmount / 10000).toLocaleString()}만
-                            </span>
-                          )}
-                        </button>
-                        <button
-                          onClick={() => setViewMode("stats")}
-                          className={cn(
-                            "px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5",
-                            viewMode === "stats"
-                              ? "bg-violet-600 shadow-sm text-white"
-                              : "text-stone-500 hover:text-stone-700",
-                          )}
-                        >
-                          <BarChart3 className="w-3.5 h-3.5" />
-                          <span>통계</span>
-                        </button>
-                      </div>
                     </div>
                     <div className="flex items-center gap-1.5 w-full sm:w-auto justify-end">
                       <button
@@ -11226,21 +11265,25 @@ function DispatchFormModal({
   const [isBounceConfirming, setIsBounceConfirming] = useState(false);
   const bounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const [isEstablishmentDropdownOpen, setIsEstablishmentDropdownOpen] =
-    useState(false);
+  const establishmentNames = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          establishments
+            .map((establishment) => establishment.name.trim())
+            .filter(Boolean),
+        ),
+      ),
+    [establishments],
+  );
 
   const filteredEstablishments = useMemo(() => {
-    if (!formData.establishmentName) return [];
-    return establishments
-      .filter((e) =>
-        e.name.toLowerCase().includes(formData.establishmentName.toLowerCase()),
-      )
-      .filter(
-        (e) =>
-          e.name.toLowerCase() !== formData.establishmentName.toLowerCase(),
-      )
+    const term = formData.establishmentName.trim().toLowerCase();
+    if (!term) return establishmentNames.slice(0, 10);
+    return establishmentNames
+      .filter((name) => name.toLowerCase().includes(term))
       .slice(0, 10);
-  }, [establishments, formData.establishmentName]);
+  }, [establishmentNames, formData.establishmentName]);
 
   const toggleStaffSelection = (name: string) => {
     const s =
@@ -11293,7 +11336,6 @@ function DispatchFormModal({
       ...prev,
       establishmentName: name,
     }));
-    setIsEstablishmentDropdownOpen(false);
 
     // Completely dismiss active focus and virtual mobile keyboards
     establishmentInputRef.current?.blur();
@@ -12307,73 +12349,69 @@ function DispatchFormModal({
                 </div>
               )}
             </div>
-            <div className="space-y-1 relative">
+            <div className="space-y-1.5">
               <label className="text-[11px] font-black text-stone-600 block ml-0.5">
                 업소명
               </label>
-              <input
-                ref={establishmentInputRef}
-                required
-                type="text"
-                value={formData.establishmentName}
-                onChange={(e) => {
-                  setFormData({
-                    ...formData,
-                    establishmentName: e.target.value,
-                  });
-                  setIsEstablishmentDropdownOpen(true);
-                }}
-                onFocus={(e) => {
-                  setIsEstablishmentDropdownOpen(true);
-                  e.target.select();
-                }}
-                onClick={(e) => {
-                  (e.target as HTMLInputElement).select();
-                }}
-                onBlur={() => {
-                  setTimeout(() => setIsEstablishmentDropdownOpen(false), 200);
-                }}
-                onKeyDown={(e) => {
-                  if (
-                    e.key === "Enter" &&
-                    isEstablishmentDropdownOpen &&
-                    filteredEstablishments.length > 0
-                  ) {
-                    e.preventDefault();
-                    handleSelectEstablishment(filteredEstablishments[0].name);
+              <div className="relative">
+                <input
+                  ref={establishmentInputRef}
+                  required
+                  type="text"
+                  value={formData.establishmentName}
+                  onChange={(e) =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      establishmentName: e.target.value,
+                    }))
                   }
-                }}
-                className="w-full bg-stone-50 hover:bg-stone-100/80 focus:bg-white border border-stone-200 focus:border-stone-900 rounded-xl px-3 py-2 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-stone-900/10 font-black text-stone-900 transition-all shadow-2xs"
-                placeholder="업소명 입력"
-                autoComplete="off"
-              />
-              {isEstablishmentDropdownOpen &&
-                filteredEstablishments.length > 0 && (
-                  <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-stone-200 rounded-xl shadow-xl z-[100] max-h-44 overflow-y-auto py-1 divide-y divide-stone-50">
-                    {filteredEstablishments.map((e) => (
-                      <button
-                        key={e.id}
-                        type="button"
-                        onMouseDown={(ev) => {
-                          ev.preventDefault();
-                          handleSelectEstablishment(e.name);
-                        }}
-                        onTouchStart={(ev) => {
-                          ev.preventDefault();
-                          handleSelectEstablishment(e.name);
-                        }}
-                        onClick={(ev) => {
-                          ev.preventDefault();
-                          handleSelectEstablishment(e.name);
-                        }}
-                        className="w-full text-left px-3 py-2 text-xs sm:text-sm hover:bg-stone-50 font-black text-stone-800 hover:text-stone-900 transition-colors flex items-center justify-between cursor-pointer"
-                      >
-                        <span>{e.name}</span>
-                        <span className="text-[10px] text-stone-400 font-bold">선택</span>
-                      </button>
-                    ))}
-                  </div>
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => {
+                    (e.target as HTMLInputElement).select();
+                  }}
+                  className="w-full bg-stone-50 hover:bg-stone-100/80 focus:bg-white border border-stone-200 focus:border-stone-900 rounded-xl pl-3 pr-8 py-2 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-stone-900/10 font-black text-stone-900 transition-all shadow-2xs"
+                  placeholder="업소명을 입력하거나 아래에서 선택하세요"
+                  autoComplete="off"
+                />
+                {formData.establishmentName && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData((prev) => ({
+                        ...prev,
+                        establishmentName: "",
+                      }));
+                      establishmentInputRef.current?.focus();
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-stone-700 rounded-full cursor-pointer"
+                    aria-label="업소명 지우기"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
                 )}
+              </div>
+
+              {filteredEstablishments.length > 0 && (
+                <div className="flex flex-wrap justify-end gap-1 pt-1">
+                  {filteredEstablishments.map((establishmentName) => (
+                    <button
+                      key={establishmentName}
+                      type="button"
+                      onClick={() =>
+                        handleSelectEstablishment(establishmentName)
+                      }
+                      className={cn(
+                        "px-2 py-1 rounded-lg text-[11px] font-extrabold border transition-all active:scale-95 cursor-pointer",
+                        formData.establishmentName === establishmentName
+                          ? "bg-stone-900 text-white border-stone-900 shadow-xs"
+                          : "bg-stone-50 text-stone-600 border-stone-200 hover:bg-stone-100 hover:text-stone-900",
+                      )}
+                    >
+                      {establishmentName}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
