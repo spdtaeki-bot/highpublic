@@ -11262,6 +11262,7 @@ function DispatchFormModal({
     useState(false);
   const [isConfirmingNewRecords, setIsConfirmingNewRecords] = useState(false);
   const [isSystemTypeDirty, setIsSystemTypeDirty] = useState(false);
+  const [isPaymentMethodDirty, setIsPaymentMethodDirty] = useState(false);
   const [isBounceConfirming, setIsBounceConfirming] = useState(false);
   const bounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -11820,6 +11821,84 @@ function DispatchFormModal({
               recordToUpdate.paymentMethod === "UNPAID" &&
               (formData.paymentMethod === "CASH" ||
                 formData.paymentMethod === "TRANSFER");
+            const isPaidMethod =
+              formData.paymentMethod === "CASH" ||
+              formData.paymentMethod === "TRANSFER";
+            const storedCollectionHistory = Array.isArray(
+              recordToUpdate.collectionHistory,
+            )
+              ? recordToUpdate.collectionHistory.filter(Boolean)
+              : [];
+            const hasExplicitOnSiteCollection =
+              storedCollectionHistory.some(
+                (entry) => entry.isOnSite === true,
+              );
+            const shouldCreateOnSiteCollection =
+              isPaidMethod &&
+              !formData.isPass &&
+              (isCollectingNow ||
+                (isPaymentMethodDirty &&
+                  !!recordToUpdate.wasUnpaid &&
+                  !hasExplicitOnSiteCollection));
+            const collectionTimestamp = shouldCreateOnSiteCollection
+              ? Timestamp.now()
+              : null;
+
+            let nextCollectionHistory: CollectionHistoryEntry[];
+            if (formData.paymentMethod === "UNPAID") {
+              nextCollectionHistory = [];
+            } else if (shouldCreateOnSiteCollection && collectionTimestamp) {
+              const normalizedHistory = [...storedCollectionHistory];
+              let existingOwnAmount = normalizedHistory
+                .filter(
+                  (entry) =>
+                    entry.isOnSite === true || entry.isShared === false,
+                )
+                .reduce((sum, entry) => sum + (entry.amount || 0), 0);
+
+              // 과거 부분수금 데이터가 금액 필드만 가진 경우 이력으로 먼저 보존한다.
+              if (
+                normalizedHistory.length === 0 &&
+                (recordToUpdate.collectedAmount || 0) > 0
+              ) {
+                const legacyAmount = Math.min(
+                  recordToUpdate.totalAmount || 0,
+                  recordToUpdate.collectedAmount || 0,
+                );
+                normalizedHistory.push({
+                  collectedAt:
+                    recordToUpdate.collectedAt || collectionTimestamp,
+                  amount: legacyAmount,
+                  paymentMethod: formData.paymentMethod,
+                  note: "기존 수금",
+                  isOnSite: false,
+                  isShared: false,
+                });
+                existingOwnAmount += legacyAmount;
+              }
+
+              const onSiteAmount = Math.max(
+                0,
+                (recordToUpdate.totalAmount || 0) - existingOwnAmount,
+              );
+              if (onSiteAmount > 0) {
+                normalizedHistory.push({
+                  collectedAt: collectionTimestamp,
+                  amount: onSiteAmount,
+                  paymentMethod: formData.paymentMethod,
+                  note: "현장 수금",
+                  isOnSite: true,
+                  isShared: false,
+                });
+              }
+              nextCollectionHistory = normalizedHistory;
+            } else {
+              nextCollectionHistory = syncOnSiteEntriesPaymentMethod(
+                recordToUpdate,
+                formData.paymentMethod,
+              );
+            }
+
             const payload = {
               staffName: recordToUpdate.staffName,
               establishmentName: formData.establishmentName,
@@ -11837,8 +11916,8 @@ function DispatchFormModal({
               tip: Number(formData.tip),
               extraFullUnits: Number(formData.extraFullUnits || 0),
               date: targetDate,
-              collectedAt: isCollectingNow
-                ? Timestamp.now()
+              collectedAt: shouldCreateOnSiteCollection
+                ? collectionTimestamp
                 : formData.paymentMethod === "UNPAID"
                   ? null
                   : recordToUpdate.collectedAt || null,
@@ -11848,17 +11927,11 @@ function DispatchFormModal({
                   : recordToUpdate.additionalCollectedAt || null,
               // 기존 수금 이력은 그대로 유지. 단, 사용자가 이 폼에서 현금↔계좌를 직접 바꾼 경우에만
               // 이 기록의 "현장 수금" 항목 수단을 함께 맞춘다 (업소 공용 항목은 변경하지 않음).
-              collectionHistory:
-                formData.paymentMethod === "UNPAID"
-                  ? []
-                  : syncOnSiteEntriesPaymentMethod(
-                      recordToUpdate,
-                      formData.paymentMethod,
-                    ),
+              collectionHistory: nextCollectionHistory,
               // 미수 → 현장 수금(현금/계좌)으로 바꾸는 경우: 이 기록 청구액 전액을 현장에서 받은 것이므로
               // 부분수금용 collectedAmount 는 삭제한다. (예전 '전체 취소'가 남긴 0 이 그대로 따라오면
               // 0원 수금으로 계산되어 업소 총수금에서 빠지는 문제가 있었다.)
-              collectedAmount: isCollectingNow
+              collectedAmount: shouldCreateOnSiteCollection
                 ? (deleteField() as any)
                 : formData.paymentMethod === "UNPAID"
                   ? undefined
@@ -11869,7 +11942,7 @@ function DispatchFormModal({
                   : recordToUpdate.depositorName ||
                     (formData as any).depositorName ||
                     null,
-              isDispatchBoxCollection: isCollectingNow
+              isDispatchBoxCollection: shouldCreateOnSiteCollection
                 ? true
                 : formData.paymentMethod === "UNPAID"
                   ? false
@@ -12062,13 +12135,14 @@ function DispatchFormModal({
                     <button
                       key={method}
                       type="button"
-                      onClick={() =>
+                      onClick={() => {
+                        setIsPaymentMethodDirty(true);
                         setFormData({
                           ...formData,
                           paymentMethod: method,
                           isPass: false,
-                        })
-                      }
+                        });
+                      }}
                       className={cn(
                         "py-2 rounded-xl border text-xs font-black transition-all cursor-pointer active:scale-95",
                         formData.paymentMethod === method && !formData.isPass
