@@ -159,9 +159,9 @@ export function FloatingStaffSearchBar({
 
         <button
           type="button"
-          onClick={() => focusSection("attendance-status-section")}
+          onClick={() => focusSection("attendance-staff-groups-section")}
           className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-blue-500/40 bg-blue-500/15 px-2 py-1.5 text-[10px] sm:text-xs font-black text-blue-300 hover:bg-blue-500/25 transition-colors active:scale-95 whitespace-nowrap"
-          title="인원 현황으로 이동"
+          title="소속별 묶음 캡쳐 공유 아래 인원 현황으로 이동"
         >
           <Users className="w-3.5 h-3.5" />
           인원현황

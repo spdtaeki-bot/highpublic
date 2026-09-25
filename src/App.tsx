@@ -3239,6 +3239,12 @@ export default function App() {
                           </div>
                         )}
 
+                        <div
+                          id="attendance-staff-groups-section"
+                          className="h-0 scroll-mt-20"
+                          aria-hidden="true"
+                        />
+
                         {(["COFFEE", "PUBLIC", "HOPPER"] as const).map(
                           (group) => {
                             const list = grouped[group];

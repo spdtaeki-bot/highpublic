@@ -1161,6 +1161,29 @@ export function UnpaidDetailView({
             </span>
           </button>
 
+          {/* 전체 내역 (완료 포함) */}
+          <button
+            onClick={() => setFilterMode("ALL")}
+            className={cn(
+              "px-3 py-1.5 rounded-xl text-xs font-black transition-all shrink-0 cursor-pointer flex items-center gap-1.5 border",
+              filterMode === "ALL"
+                ? "bg-stone-900 text-white border-stone-900 shadow-xs"
+                : "bg-stone-50 text-stone-600 border-stone-200 hover:bg-stone-100",
+            )}
+          >
+            <span>전체 내역 (완료 포함)</span>
+            <span
+              className={cn(
+                "px-1.5 py-0.2 rounded-full text-[10px]",
+                filterMode === "ALL"
+                  ? "bg-white/20 text-white font-black"
+                  : "bg-stone-200 text-stone-600",
+              )}
+            >
+              {overallStats.totalEstCount}
+            </span>
+          </button>
+
           {/* 미수 발생 건만 (수금 내역 전혀 없음) */}
           <button
             onClick={() => setFilterMode("UNPAID_ONLY")}
@@ -1250,29 +1273,6 @@ export function UnpaidDetailView({
               )}
             >
               {overallStats.pastUnpaidCount}
-            </span>
-          </button>
-
-          {/* 전체 내역 (완료 포함) */}
-          <button
-            onClick={() => setFilterMode("ALL")}
-            className={cn(
-              "px-3 py-1.5 rounded-xl text-xs font-black transition-all shrink-0 cursor-pointer flex items-center gap-1.5 border",
-              filterMode === "ALL"
-                ? "bg-stone-900 text-white border-stone-900 shadow-xs"
-                : "bg-stone-50 text-stone-600 border-stone-200 hover:bg-stone-100",
-            )}
-          >
-            <span>전체 내역 (완료 포함)</span>
-            <span
-              className={cn(
-                "px-1.5 py-0.2 rounded-full text-[10px]",
-                filterMode === "ALL"
-                  ? "bg-white/20 text-white font-black"
-                  : "bg-stone-200 text-stone-600",
-              )}
-            >
-              {overallStats.totalEstCount}
             </span>
           </button>
 
