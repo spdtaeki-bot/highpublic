@@ -256,6 +256,7 @@ interface UnpaidDetailViewProps {
     updates: Partial<DispatchRecord>,
   ) => Promise<void>;
   onEditRecord?: (record: DispatchRecord) => void;
+  onViewDispatchRecord?: (record: DispatchRecord) => void;
 }
 
 export function UnpaidDetailView({
@@ -265,6 +266,7 @@ export function UnpaidDetailView({
   selectedDate,
   onUpdateRecord,
   onEditRecord,
+  onViewDispatchRecord,
 }: UnpaidDetailViewProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterMode, setFilterMode] = useState<
@@ -2091,19 +2093,33 @@ export function UnpaidDetailView({
                                     </div>
                                   </div>
 
-                                  {/* Right: Optional Edit Button */}
-                                  {onEditRecord && (
+                                  {/* Right: Dispatch Check & Edit Buttons */}
+                                  {(onViewDispatchRecord || onEditRecord) && (
                                     <div
                                       data-html2canvas-ignore="true"
                                       data-capture-ignore="true"
-                                      className="flex items-center shrink-0"
+                                      className="flex items-center gap-1.5 shrink-0"
                                     >
-                                      <button
-                                        onClick={() => onEditRecord(r)}
-                                        className="px-2.5 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
-                                      >
-                                        수정
-                                      </button>
+                                      {onViewDispatchRecord && (
+                                        <button
+                                          type="button"
+                                          onClick={() => onViewDispatchRecord(r)}
+                                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black shadow-xs transition-all active:scale-95 cursor-pointer"
+                                          title={`${r.date} 파견기록에서 바로 확인`}
+                                        >
+                                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                          체크
+                                        </button>
+                                      )}
+                                      {onEditRecord && (
+                                        <button
+                                          type="button"
+                                          onClick={() => onEditRecord(r)}
+                                          className="px-2.5 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                                        >
+                                          수정
+                                        </button>
+                                      )}
                                     </div>
                                   )}
                                 </div>

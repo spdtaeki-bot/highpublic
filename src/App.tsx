@@ -548,6 +548,11 @@ export default function App() {
     string | null
   >(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const [pendingDispatchFocus, setPendingDispatchFocus] = useState<{
+    recordId: string;
+    staffName: string;
+    date: string;
+  } | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "settlement" | "unpaid" | "stats">(() => {
     const saved = localStorage.getItem("office_view_mode");
     if (saved === "timeline") return "settlement";
@@ -679,6 +684,54 @@ export default function App() {
   }, [highlightedId]);
 
   useEffect(() => {
+    if (
+      !pendingDispatchFocus ||
+      viewMode !== "list" ||
+      selectedDate !== pendingDispatchFocus.date ||
+      !records.some((record) => record.id === pendingDispatchFocus.recordId)
+    ) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const recordElement = document.getElementById(
+        `record-${pendingDispatchFocus.recordId}`,
+      );
+      if (!recordElement) return;
+
+      const staffColumn = document.getElementById(
+        `staff-column-${pendingDispatchFocus.staffName}`,
+      );
+      const horizontalContainer = staffColumn?.closest(
+        ".overflow-x-auto",
+      ) as HTMLElement | null;
+      if (staffColumn && horizontalContainer) {
+        horizontalContainer.scrollLeft =
+          staffColumn.offsetLeft -
+          horizontalContainer.clientWidth / 2 +
+          staffColumn.offsetWidth / 2;
+      }
+
+      const fixedHeaderOffset = window.innerWidth >= 640 ? 84 : 72;
+      const targetTop = Math.max(
+        0,
+        recordElement.getBoundingClientRect().top +
+          window.scrollY -
+          fixedHeaderOffset,
+      );
+      document.documentElement.scrollTop = targetTop;
+      document.body.scrollTop = targetTop;
+
+      setHighlightedStaffColumn(pendingDispatchFocus.staffName);
+      setHighlightedId(pendingDispatchFocus.recordId);
+      setPendingDispatchFocus(null);
+      window.setTimeout(() => setHighlightedStaffColumn(null), 3000);
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [pendingDispatchFocus, records, selectedDate, viewMode]);
+
+  useEffect(() => {
     window.addEventListener("beforeinstallprompt", (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
@@ -748,6 +801,23 @@ export default function App() {
     // Re-apply the same instant jump after their layout has expanded.
     window.setTimeout(jumpToViewContent, 120);
     window.setTimeout(jumpToViewContent, 350);
+  };
+
+  const handleViewDispatchRecord = (record: DispatchRecord) => {
+    if (!record.id) {
+      setAlertConfig({
+        message: "선택한 파견기록을 찾을 수 없습니다.",
+      });
+      return;
+    }
+
+    setPendingDispatchFocus({
+      recordId: record.id,
+      staffName: record.staffName,
+      date: record.date,
+    });
+    setSelectedDate(record.date);
+    setViewMode("list");
   };
 
   // 하단 직원 검색창 전용: 파견 기록이 아니라 "인원 현황" 안의 직원 카드로 포커싱
@@ -3965,6 +4035,7 @@ export default function App() {
                           await updateDispatch(id, updates as any);
                         }}
                         onEditRecord={(record) => setEditingRecord(record)}
+                        onViewDispatchRecord={handleViewDispatchRecord}
                       />
                     ) : records.length === 0 &&
                       bouncedRecords.length === 0 &&
