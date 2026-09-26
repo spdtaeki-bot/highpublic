@@ -485,9 +485,18 @@ export default function App() {
 
   const weeklyAttendanceMap = useMemo(() => {
     const map: Record<string, Set<string>> = {};
+    const weekStart = format(
+      startOfWeek(parseISO(selectedDate), { weekStartsOn: 1 }),
+      "yyyy-MM-dd",
+    );
+    const weekEnd = format(
+      endOfWeek(parseISO(selectedDate), { weekStartsOn: 1 }),
+      "yyyy-MM-dd",
+    );
 
     weeklyAttendanceData.forEach((item) => {
       const d = item.date;
+      if (d < weekStart || d > weekEnd) return;
       const ids = new Set<string>([
         ...(item.staffIds || []),
         ...Object.keys(item.checkInTimes || {}),
@@ -511,6 +520,84 @@ export default function App() {
     });
     return counts;
   }, [weeklyAttendanceData, selectedDate, checkInTimes]);
+
+  const previousWeekAttendanceMap = useMemo(() => {
+    const selected = parseISO(selectedDate);
+    const currentMonday = startOfWeek(selected, { weekStartsOn: 1 });
+    const previousMonday = subDays(currentMonday, 7);
+    const previousSunday = addDays(previousMonday, 6);
+    const previousFriday = format(addDays(previousMonday, 4), "yyyy-MM-dd");
+    const previousSaturday = format(addDays(previousMonday, 5), "yyyy-MM-dd");
+    const previousStart = format(previousMonday, "yyyy-MM-dd");
+    const previousEnd = format(previousSunday, "yyyy-MM-dd");
+    const attendanceDatesByStaff: Record<string, Set<string>> = {};
+
+    weeklyAttendanceData.forEach((item) => {
+      if (item.date < previousStart || item.date > previousEnd) return;
+      const attendedIds = new Set<string>([
+        ...(item.staffIds || []),
+        ...Object.keys(item.checkInTimes || {}),
+      ]);
+      attendedIds.forEach((staffId) => {
+        if (!attendanceDatesByStaff[staffId]) {
+          attendanceDatesByStaff[staffId] = new Set<string>();
+        }
+        attendanceDatesByStaff[staffId].add(item.date);
+      });
+    });
+
+    const result: Record<
+      string,
+      { attendanceDays: number; attendedFriday: boolean; attendedSaturday: boolean }
+    > = {};
+    Object.entries(attendanceDatesByStaff).forEach(([staffId, dates]) => {
+      result[staffId] = {
+        attendanceDays: dates.size,
+        attendedFriday: dates.has(previousFriday),
+        attendedSaturday: dates.has(previousSaturday),
+      };
+    });
+    return result;
+  }, [weeklyAttendanceData, selectedDate]);
+
+  const twoWeeksAgoAttendanceMap = useMemo(() => {
+    const selected = parseISO(selectedDate);
+    const currentMonday = startOfWeek(selected, { weekStartsOn: 1 });
+    const twoWeeksAgoMonday = subDays(currentMonday, 14);
+    const twoWeeksAgoSunday = addDays(twoWeeksAgoMonday, 6);
+    const twoWeeksAgoFriday = format(addDays(twoWeeksAgoMonday, 4), "yyyy-MM-dd");
+    const twoWeeksAgoSaturday = format(addDays(twoWeeksAgoMonday, 5), "yyyy-MM-dd");
+    const rangeStart = format(twoWeeksAgoMonday, "yyyy-MM-dd");
+    const rangeEnd = format(twoWeeksAgoSunday, "yyyy-MM-dd");
+    const attendanceDatesByStaff: Record<string, Set<string>> = {};
+
+    weeklyAttendanceData.forEach((item) => {
+      if (item.date < rangeStart || item.date > rangeEnd) return;
+      const attendedIds = new Set<string>([
+        ...(item.staffIds || []),
+        ...Object.keys(item.checkInTimes || {}),
+      ]);
+      attendedIds.forEach((staffId) => {
+        if (!attendanceDatesByStaff[staffId]) {
+          attendanceDatesByStaff[staffId] = new Set<string>();
+        }
+        attendanceDatesByStaff[staffId].add(item.date);
+      });
+    });
+
+    const result: Record<
+      string,
+      { attendanceDays: number; attendedFriday: boolean; attendedSaturday: boolean }
+    > = {};
+    Object.entries(attendanceDatesByStaff).forEach(([staffId, dates]) => {
+      result[staffId] = {
+        attendanceDays: dates.size,
+        attendedFriday: dates.has(twoWeeksAgoFriday),
+        attendedSaturday: dates.has(twoWeeksAgoSaturday),
+      };
+    });
+    return result;
+  }, [weeklyAttendanceData, selectedDate]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isStaffModalOpen, setIsStaffModalOpen] = useState(() => {
     return localStorage.getItem("office_is_staff_modal_open") === "true";
@@ -553,6 +640,12 @@ export default function App() {
     staffName: string;
     date: string;
   } | null>(null);
+  const [pendingSettlementStaff, setPendingSettlementStaff] = useState<
+    string | null
+  >(null);
+  const [pendingUnpaidRecordIds, setPendingUnpaidRecordIds] = useState<
+    string[] | null
+  >(null);
   const [viewMode, setViewMode] = useState<"list" | "settlement" | "unpaid" | "stats">(() => {
     const saved = localStorage.getItem("office_view_mode");
     if (saved === "timeline") return "settlement";
@@ -818,6 +911,45 @@ export default function App() {
     });
     setSelectedDate(record.date);
     setViewMode("list");
+  };
+
+  const handleViewStaffSettlement = (staffName: string) => {
+    setPendingSettlementStaff(staffName);
+    setViewMode("settlement");
+  };
+
+  const handleViewStaffUnpaidRecord = (staffName: string) => {
+    const candidates = records
+      .filter(
+        (record) =>
+          record.id &&
+          isSameStaffIdentity(record.staffName || "", staffName) &&
+          getRecordBusinessDate(record) === selectedDate &&
+          (record.paymentMethod === "UNPAID" ||
+            (record.collectedAmount !== undefined &&
+              record.collectedAmount < record.totalAmount)),
+      )
+      .sort((a, b) => {
+        const toMillis = (value: any) => {
+          if (!value) return 0;
+          const date = value.toDate ? value.toDate() : new Date(value);
+          return date.getTime();
+        };
+        return toMillis(a.startTime) - toMillis(b.startTime);
+      });
+
+    const targetRecordIds = candidates
+      .map((record) => record.id)
+      .filter((id): id is string => Boolean(id));
+    if (targetRecordIds.length === 0) {
+      setAlertConfig({
+        message: `${staffName} 님의 해당일 미수금 상세 기록이 없습니다.`,
+      });
+      return;
+    }
+
+    setPendingUnpaidRecordIds(targetRecordIds);
+    setViewMode("unpaid");
   };
 
   // 하단 직원 검색창 전용: 파견 기록이 아니라 "인원 현황" 안의 직원 카드로 포커싱
@@ -1729,8 +1861,11 @@ export default function App() {
           handleSubscriptionError(err);
         },
       );
-      const monday = format(
-        startOfWeek(parseISO(selectedDate), { weekStartsOn: 1 }),
+      const currentMonday = startOfWeek(parseISO(selectedDate), {
+        weekStartsOn: 1,
+      });
+      const attendanceRangeStart = format(
+        subDays(currentMonday, 14),
         "yyyy-MM-dd",
       );
       const sunday = format(
@@ -1738,7 +1873,7 @@ export default function App() {
         "yyyy-MM-dd",
       );
       const unsubWeeklyAttendance = subscribeToWeeklyAttendance(
-        monday,
+        attendanceRangeStart,
         sunday,
         (data) => {
           setWeeklyAttendanceData(data);
@@ -3553,6 +3688,76 @@ export default function App() {
                                         )}
                                       >
                                         {(() => {
+                                          const twoWeeksAgo =
+                                            (s.id &&
+                                              twoWeeksAgoAttendanceMap[s.id]) || {
+                                              attendanceDays: 0,
+                                              attendedFriday: false,
+                                              attendedSaturday: false,
+                                            };
+                                          const previousWeek =
+                                            (s.id &&
+                                              previousWeekAttendanceMap[s.id]) || {
+                                              attendanceDays: 0,
+                                              attendedFriday: false,
+                                              attendedSaturday: false,
+                                            };
+                                          return (
+                                            <>
+                                              <div
+                                                className="absolute top-1 left-1 z-10 w-4 py-1 rounded-md border border-stone-200 bg-white/90 shadow-2xs flex flex-col items-center gap-1 pointer-events-none"
+                                                title={`지지난주 출근 ${twoWeeksAgo.attendanceDays}일 · 금요일 ${twoWeeksAgo.attendedFriday ? "출근" : "미출근"} · 토요일 ${twoWeeksAgo.attendedSaturday ? "출근" : "미출근"}`}
+                                                aria-label={`지지난주 출근 ${twoWeeksAgo.attendanceDays}일, 금요일 ${twoWeeksAgo.attendedFriday ? "출근" : "미출근"}, 토요일 ${twoWeeksAgo.attendedSaturday ? "출근" : "미출근"}`}
+                                              >
+                                                <span className="text-[9px] leading-none font-black text-stone-700">
+                                                  {twoWeeksAgo.attendanceDays}
+                                                </span>
+                                                <span
+                                                  className={cn(
+                                                    "w-2 h-2 rounded-full shrink-0",
+                                                    twoWeeksAgo.attendedFriday
+                                                      ? "bg-emerald-500"
+                                                      : "bg-red-500",
+                                                  )}
+                                                />
+                                                <span
+                                                  className={cn(
+                                                    "w-2 h-2 rounded-full shrink-0",
+                                                    twoWeeksAgo.attendedSaturday
+                                                      ? "bg-emerald-500"
+                                                      : "bg-red-500",
+                                                  )}
+                                                />
+                                              </div>
+                                              <div
+                                                className="absolute top-1 right-1 z-10 w-4 py-1 rounded-md border border-stone-200 bg-white/90 shadow-2xs flex flex-col items-center gap-1 pointer-events-none"
+                                                title={`지난주 출근 ${previousWeek.attendanceDays}일 · 금요일 ${previousWeek.attendedFriday ? "출근" : "미출근"} · 토요일 ${previousWeek.attendedSaturday ? "출근" : "미출근"}`}
+                                                aria-label={`지난주 출근 ${previousWeek.attendanceDays}일, 금요일 ${previousWeek.attendedFriday ? "출근" : "미출근"}, 토요일 ${previousWeek.attendedSaturday ? "출근" : "미출근"}`}
+                                              >
+                                                <span className="text-[9px] leading-none font-black text-stone-700">
+                                                  {previousWeek.attendanceDays}
+                                                </span>
+                                                <span
+                                                  className={cn(
+                                                    "w-2 h-2 rounded-full shrink-0",
+                                                    previousWeek.attendedFriday
+                                                      ? "bg-emerald-500"
+                                                      : "bg-red-500",
+                                                  )}
+                                                />
+                                                <span
+                                                  className={cn(
+                                                    "w-2 h-2 rounded-full shrink-0",
+                                                    previousWeek.attendedSaturday
+                                                      ? "bg-emerald-500"
+                                                      : "bg-red-500",
+                                                  )}
+                                                />
+                                              </div>
+                                            </>
+                                          );
+                                        })()}
+                                        {(() => {
                                           const { main4, affiliation } = formatStaffNameComponents(s.name);
                                           return (
                                             <div className="flex flex-col items-center justify-center w-full min-w-0 px-0.5">
@@ -4036,6 +4241,10 @@ export default function App() {
                         }}
                         onEditRecord={(record) => setEditingRecord(record)}
                         onViewDispatchRecord={handleViewDispatchRecord}
+                        focusRecordIds={pendingUnpaidRecordIds}
+                        onFocusRecordComplete={() =>
+                          setPendingUnpaidRecordIds(null)
+                        }
                       />
                     ) : records.length === 0 &&
                       bouncedRecords.length === 0 &&
@@ -4075,6 +4284,8 @@ export default function App() {
                             targetStaffName: staffName,
                           })
                         }
+                        onViewSettlement={handleViewStaffSettlement}
+                        onViewUnpaidRecord={handleViewStaffUnpaidRecord}
                         highlightedStaffColumn={highlightedStaffColumn}
                         selectedDate={selectedDate}
                         highlightedId={highlightedId}
@@ -4104,6 +4315,11 @@ export default function App() {
                             initialSearchTerm: staffName,
                             targetStaffName: staffName,
                           })
+                        }
+                        onViewDispatchRecords={handleFocusStaffRecord}
+                        focusStaffName={pendingSettlementStaff}
+                        onFocusStaffComplete={() =>
+                          setPendingSettlementStaff(null)
                         }
                         selectedDate={selectedDate}
                         bouncedRecords={bouncedRecords}
@@ -6279,6 +6495,8 @@ function ListView({
   manualDailyProfits,
   onManualProfitClick,
   onStaffPaymentClick,
+  onViewSettlement,
+  onViewUnpaidRecord,
   highlightedStaffColumn,
   selectedDate,
   highlightedId,
@@ -6301,6 +6519,8 @@ function ListView({
   manualDailyProfits: Record<string, number>;
   onManualProfitClick: (staffName: string, calculatedProfit: number) => void;
   onStaffPaymentClick: (staffName: string) => void;
+  onViewSettlement?: (staffName: string) => void;
+  onViewUnpaidRecord?: (staffName: string) => void;
   highlightedStaffColumn?: string | null;
   selectedDate?: string;
   highlightedId?: string | null;
@@ -6575,7 +6795,7 @@ function ListView({
                         : "border-red-500 bg-red-100 shadow-red-100 shadow-lg",
                 )}
               >
-                <div className="flex items-center justify-between mb-1">
+                <div className="flex flex-wrap items-stretch justify-between mb-1">
                   <div
                     onClick={() => {
                       if (!isOff && isWorking) onAddRecordForStaff([name]);
@@ -6649,10 +6869,10 @@ function ListView({
                                   e.stopPropagation();
                                   onBounceBadgeClick?.(name);
                                 }}
-                                className="w-full mt-0.5 py-0.5 px-1.5 rounded-md text-[8px] sm:text-[9px] font-black bg-rose-500 hover:bg-rose-600 text-white shadow-2xs cursor-pointer active:scale-98 transition-all flex items-center justify-center gap-0.5 text-center tracking-tight"
+                                className="w-full h-[15px] mt-0.5 px-1.5 rounded-md text-[8px] sm:text-[9px] font-black bg-rose-500 hover:bg-rose-600 text-white shadow-2xs cursor-pointer active:scale-98 transition-all flex items-center justify-center gap-0.5 text-center tracking-tight"
                                 title={`총 ${totalAttempts}회 초이스 중 ${dispatchCount}회 진행 (${bounceCount}회 튕김) · 진행확률 ${selectRate}% - 클릭 시 상세 내역`}
                               >
-                                <span>
+                                <span className="whitespace-nowrap leading-none">
                                   진행 {dispatchCount}/{totalAttempts}회 ({selectRate}%)
                                 </span>
                               </button>
@@ -6690,10 +6910,10 @@ function ListView({
 
                             return (
                               <div
-                                className="w-full mt-0.5 py-0.5 px-1.5 rounded-md text-[8px] sm:text-[9px] font-black bg-indigo-600 text-white shadow-2xs flex items-center justify-center gap-0.5 text-center tracking-tight select-none"
+                                className="w-full h-[15px] mt-0.5 px-1.5 rounded-md text-[8px] sm:text-[9px] font-black bg-indigo-600 text-white shadow-2xs flex items-center justify-center gap-0.5 text-center tracking-tight select-none"
                                 title={`진행된 업무 ${dispatchCount}건 중 ${extendedCount}건 연장 (1.5시간 이상) · 연장률 ${extendRate}%`}
                               >
-                                <span>
+                                <span className="whitespace-nowrap leading-none">
                                   연장 {extendedCount}/{dispatchCount}회 ({extendRate}%)
                                 </span>
                               </div>
@@ -6706,10 +6926,10 @@ function ListView({
 
                             return (
                               <div
-                                className="w-full mt-0.5 py-0.5 px-1.5 rounded-md text-[8px] sm:text-[9px] font-black bg-emerald-600 text-white shadow-2xs flex items-center justify-center gap-0.5 text-center tracking-tight select-none"
+                                className="w-full h-[15px] mt-0.5 px-1.5 rounded-md text-[8px] sm:text-[9px] font-black bg-emerald-600 text-white shadow-2xs flex items-center justify-center gap-0.5 text-center tracking-tight select-none"
                                 title={`이번 주 출근 ${weeklyDays}일 / 기본 필수 4일 기준 (${weeklyRate}%)`}
                               >
-                                <span>
+                                <span className="whitespace-nowrap leading-none">
                                   출근 {weeklyDays}/4 ({weeklyRate}%)
                                 </span>
                               </div>
@@ -6718,63 +6938,55 @@ function ListView({
                         </div>
                       );
                     })()}
-                    {isWorking && staffId && checkInTimes[staffId] ? (
+                  </div>
+
+                  {/* Center: quick navigation badges */}
+                  {staffGroups[name]?.records?.length > 0 &&
+                    (onViewSettlement || onViewUnpaidRecord) && (
                       <div
-                        className={cn(
-                          "text-[10px] flex flex-col items-center gap-0.5 mt-0.5 leading-tight tracking-tight",
-                          isOff
-                            ? "text-red-600 font-bold"
-                            : "text-stone-400 font-medium",
-                        )}
+                        data-html2canvas-ignore="true"
+                        className="w-8 h-[53px] self-end shrink-0 flex flex-col items-stretch gap-1 mx-0.5"
                       >
-                        {selectedDate && (
-                          <span>
-                            {format(parseISO(selectedDate), "yyyy.MM.dd(eee)", {
-                              locale: ko,
-                            })}
-                          </span>
+                        {onViewSettlement && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onViewSettlement(name);
+                            }}
+                            className="h-[24.5px] inline-flex items-center justify-center gap-0.5 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white text-[7px] font-black shadow-xs transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                            title={`${name} 정산 내역으로 이동`}
+                          >
+                            <Wallet className="w-2.5 h-2.5 shrink-0" />
+                            정산
+                          </button>
                         )}
-                        <span>
-                          출근:{" "}
-                          {format(
-                            checkInTimes[staffId]?.toDate
-                              ? checkInTimes[staffId].toDate()
-                              : new Date(checkInTimes[staffId]),
-                            "HH:mm",
-                          )}
-                          {isOff &&
-                            offTimes[staffId] &&
-                            ` | 퇴근: ${format(
-                              offTimes[staffId]?.toDate
-                                ? offTimes[staffId].toDate()
-                                : new Date(offTimes[staffId]),
-                              "HH:mm",
-                            )}`}
-                        </span>
-                      </div>
-                    ) : (
-                      <div className="text-[9px] flex flex-col items-center gap-0.5 mt-0.5 leading-tight tracking-tight text-amber-700 font-bold">
-                        {selectedDate && (
-                          <span className="text-stone-400 font-medium">
-                            {format(parseISO(selectedDate), "yyyy.MM.dd(eee)", {
-                              locale: ko,
-                            })}
-                          </span>
+                        {onViewUnpaidRecord && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onViewUnpaidRecord(name);
+                            }}
+                            className="h-[24.5px] inline-flex items-center justify-center gap-0.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-[7px] font-black shadow-xs transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                            title={`${name} 당일 미수금 상세 기록으로 이동`}
+                          >
+                            <AlertCircle className="w-2.5 h-2.5 shrink-0" />
+                            미수
+                          </button>
                         )}
-                        <span className="bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded text-[8.5px] font-black border border-amber-300 shadow-2xs whitespace-nowrap">
-                          ⚠️ 미출근 (기록만 존재)
-                        </span>
                       </div>
                     )}
-                  </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
+
+                  {/* Right: capture and attendance controls */}
+                  <div className="w-8 h-[53px] self-end flex flex-col items-stretch gap-1 shrink-0">
                     <button
                       data-html2canvas-ignore="true"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleCapture(name);
                       }}
-                      className="text-stone-500 hover:text-stone-800 transition-colors p-0.5 bg-white/50 rounded-md border border-stone-200/50"
+                      className="h-[24.5px] inline-flex items-center justify-center text-stone-500 hover:text-stone-800 transition-colors bg-white/70 rounded-md border border-stone-300/70"
                       title="업무내역 캡쳐 공유"
                     >
                       <Camera className="w-3.5 h-3.5" />
@@ -6784,7 +6996,7 @@ function ListView({
                         <button
                           onClick={() => onToggleOff(staffId)}
                           className={cn(
-                            "px-1 py-0.5 rounded-lg text-[8px] font-black transition-all cursor-pointer",
+                            "h-[24.5px] inline-flex items-center justify-center rounded-md text-[7px] font-black transition-all cursor-pointer whitespace-nowrap",
                             isOff
                               ? "bg-stone-900 text-white hover:bg-stone-800"
                               : "bg-stone-200 text-stone-600 hover:bg-stone-300",
@@ -6795,12 +7007,59 @@ function ListView({
                       ) : onToggleWorking ? (
                         <button
                           onClick={(e) => onToggleWorking(staffId, e)}
-                          className="px-1.5 py-0.5 rounded-lg text-[8px] font-black bg-amber-500 hover:bg-amber-600 text-white transition-all shadow-xs cursor-pointer active:scale-95 whitespace-nowrap"
+                          className="h-[24.5px] inline-flex items-center justify-center rounded-md px-0.5 text-[7px] leading-tight font-black bg-amber-500 hover:bg-amber-600 text-white transition-all shadow-xs cursor-pointer active:scale-95 whitespace-normal text-center"
                           title="이 직원을 오늘 출근 명단에 등록(동기화)합니다"
                         >
                           출근 등록
                         </button>
                       ) : null
+                    )}
+                  </div>
+
+                  {/* Full-width attendance date and time line */}
+                  <div
+                    className={cn(
+                      "basis-full w-full mt-1 px-1 py-1 rounded-md border border-stone-300/80 bg-white/70 shadow-2xs flex items-center justify-center gap-0.5 text-[11.5px] font-bold leading-none tracking-tighter whitespace-nowrap overflow-hidden",
+                      isWorking && staffId && checkInTimes[staffId]
+                        ? isOff
+                          ? "text-red-600"
+                          : "text-stone-600"
+                        : "text-amber-700",
+                    )}
+                  >
+                    {selectedDate && (
+                      <span className="shrink-0">
+                        {format(parseISO(selectedDate), "MM.dd(eee)", {
+                          locale: ko,
+                        })}
+                      </span>
+                    )}
+                    {isWorking && staffId && checkInTimes[staffId] ? (
+                      <>
+                        <span className="text-stone-300 shrink-0">•</span>
+                        <span className="shrink-0">
+                          출{" "}
+                          {format(
+                            checkInTimes[staffId]?.toDate
+                              ? checkInTimes[staffId].toDate()
+                              : new Date(checkInTimes[staffId]),
+                            "HH:mm",
+                          )}
+                          {isOff &&
+                            offTimes[staffId] &&
+                            ` · 퇴 ${format(
+                              offTimes[staffId]?.toDate
+                                ? offTimes[staffId].toDate()
+                                : new Date(offTimes[staffId]),
+                              "HH:mm",
+                            )}`}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-stone-300 shrink-0">•</span>
+                        <span className="shrink-0">⚠️ 미출근 (기록만 존재)</span>
+                      </>
                     )}
                   </div>
                 </div>

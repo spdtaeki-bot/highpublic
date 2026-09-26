@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { format, parseISO } from "date-fns";
 import { ko } from "date-fns/locale";
 import {
@@ -257,6 +257,8 @@ interface UnpaidDetailViewProps {
   ) => Promise<void>;
   onEditRecord?: (record: DispatchRecord) => void;
   onViewDispatchRecord?: (record: DispatchRecord) => void;
+  focusRecordIds?: string[] | null;
+  onFocusRecordComplete?: () => void;
 }
 
 export function UnpaidDetailView({
@@ -267,6 +269,8 @@ export function UnpaidDetailView({
   onUpdateRecord,
   onEditRecord,
   onViewDispatchRecord,
+  focusRecordIds,
+  onFocusRecordComplete,
 }: UnpaidDetailViewProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterMode, setFilterMode] = useState<
@@ -305,6 +309,8 @@ export function UnpaidDetailView({
 
   // Screenshot Capture State
   const [isCapturing, setIsCapturing] = useState<string | null>(null);
+  const [highlightedNavigationRecordIds, setHighlightedNavigationRecordIds] =
+    useState<string[]>([]);
 
   // Capture Single Establishment Unpaid Card or Entire Date Group
   const handleCaptureEstablishment = async (
@@ -393,6 +399,65 @@ export function UnpaidDetailView({
 
     return Array.from(map.values());
   }, [allUnpaidRecords, records]);
+
+  useEffect(() => {
+    if (!focusRecordIds || focusRecordIds.length === 0) return;
+
+    const targetRecords = focusRecordIds
+      .map((id) => combinedRecords.find((record) => record.id === id))
+      .filter((record): record is DispatchRecord => Boolean(record));
+    const firstTargetRecord = targetRecords[0];
+    if (!firstTargetRecord) return;
+
+    const targetDate = getRecordBusinessDate(firstTargetRecord);
+    setSearchTerm(firstTargetRecord.staffName);
+    setFilterMode("ALL");
+    setExpandedDates((previous) => ({
+      ...previous,
+      [targetDate]: true,
+    }));
+
+    let completed = false;
+    let secondFrame = 0;
+    const focusRecord = () => {
+      if (completed) return true;
+      const target = document.getElementById(
+        `unpaid-record-${focusRecordIds[0]}`,
+      );
+      if (!target) return false;
+
+      const fixedHeaderOffset = window.innerWidth >= 640 ? 84 : 72;
+      const targetTop = Math.max(
+        0,
+        target.getBoundingClientRect().top +
+          window.scrollY -
+          fixedHeaderOffset,
+      );
+      document.documentElement.scrollTop = targetTop;
+      document.body.scrollTop = targetTop;
+
+      completed = true;
+      setHighlightedNavigationRecordIds(focusRecordIds);
+      onFocusRecordComplete?.();
+      window.setTimeout(
+        () => setHighlightedNavigationRecordIds([]),
+        3000,
+      );
+      return true;
+    };
+
+    const firstFrame = requestAnimationFrame(() => {
+      if (!focusRecord()) {
+        secondFrame = requestAnimationFrame(focusRecord);
+      }
+    });
+    const retry = window.setTimeout(focusRecord, 150);
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      if (secondFrame) cancelAnimationFrame(secondFrame);
+      window.clearTimeout(retry);
+    };
+  }, [combinedRecords, focusRecordIds]);
 
   // Check if dispatch is ongoing
   const isOngoing = (r: DispatchRecord) => {
@@ -1845,8 +1910,14 @@ export function UnpaidDetailView({
 
                               return (
                                 <div
+                                  id={`unpaid-record-${r.id}`}
                                   key={r.id || `${r.staffName}-${rIdx}`}
-                                  className="pt-2.5 first:pt-0 flex items-center justify-between gap-3"
+                                  className={cn(
+                                    "pt-2.5 first:pt-0 flex items-center justify-between gap-3 rounded-xl transition-all",
+                                    r.id &&
+                                      highlightedNavigationRecordIds.includes(r.id) &&
+                                      "ring-4 ring-red-500 bg-red-50 px-2 shadow-lg",
+                                  )}
                                 >
                                   {/* Left: Staff Info & Work Time */}
                                   <div className="flex flex-col gap-1 min-w-0 flex-1">

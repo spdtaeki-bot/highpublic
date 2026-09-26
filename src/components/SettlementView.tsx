@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Wallet,
   Camera,
@@ -133,6 +133,9 @@ interface SettlementViewProps {
   manualDailyProfits: Record<string, number>;
   onManualProfitClick: (staffName: string, calculatedProfit: number) => void;
   onStaffPaymentClick: (staffName: string) => void;
+  onViewDispatchRecords?: (staffName: string) => void;
+  focusStaffName?: string | null;
+  onFocusStaffComplete?: () => void;
   selectedDate?: string;
   bouncedRecords?: BouncedRecord[];
 }
@@ -148,12 +151,58 @@ export function SettlementView({
   manualDailyProfits,
   onManualProfitClick,
   onStaffPaymentClick,
+  onViewDispatchRecords,
+  focusStaffName,
+  onFocusStaffComplete,
   selectedDate,
   bouncedRecords,
 }: SettlementViewProps) {
   // Modal state for Batch Affiliation Payment
   const [batchModalAffiliation, setBatchModalAffiliation] = useState<string | null>(null);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+  const [highlightedNavigationStaff, setHighlightedNavigationStaff] = useState<
+    string | null
+  >(null);
+
+  useEffect(() => {
+    if (!focusStaffName) return;
+
+    let completed = false;
+    const focusStaff = () => {
+      if (completed) return true;
+      const target = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-settlement-staff-name]"),
+      ).find(
+        (element) =>
+          element.dataset.settlementStaffName === focusStaffName &&
+          element.offsetParent !== null,
+      );
+      if (!target) return false;
+
+      const fixedHeaderOffset = window.innerWidth >= 640 ? 84 : 72;
+      const targetTop = Math.max(
+        0,
+        target.getBoundingClientRect().top +
+          window.scrollY -
+          fixedHeaderOffset,
+      );
+      document.documentElement.scrollTop = targetTop;
+      document.body.scrollTop = targetTop;
+
+      completed = true;
+      setHighlightedNavigationStaff(focusStaffName);
+      onFocusStaffComplete?.();
+      window.setTimeout(() => setHighlightedNavigationStaff(null), 3000);
+      return true;
+    };
+
+    const frame = requestAnimationFrame(focusStaff);
+    const retry = window.setTimeout(focusStaff, 120);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(retry);
+    };
+  }, [focusStaffName]);
 
   // Format date nicely for display & screenshot
   const formattedDate = useMemo(() => {
@@ -1164,12 +1213,15 @@ export function SettlementView({
                   {aff.staffList.map((s) => (
                     <div
                       key={`mobile-${s.rawName}`}
+                      data-settlement-staff-name={s.rawName}
                       onClick={() => onStaffPaymentClick(s.rawName)}
                       className={cn(
                         "p-3 rounded-xl border transition-all cursor-pointer active:scale-[0.99] space-y-2 w-full",
                         s.isOff
                           ? "bg-stone-50/40 border-stone-200 opacity-60"
                           : "bg-stone-50/80 hover:bg-stone-100/90 border-stone-200/80 shadow-2xs",
+                        highlightedNavigationStaff === s.rawName &&
+                          "ring-4 ring-indigo-500 border-indigo-500 shadow-lg",
                       )}
                     >
                       {/* Top Row: Name, Type, Dispatches, Final Deposit */}
@@ -1209,8 +1261,24 @@ export function SettlementView({
                           )}
                         </div>
 
-                        {/* Final Expected Deposit Badge */}
-                        <div className="text-right shrink-0">
+                        {/* Dispatch Check & Final Expected Deposit Badges */}
+                        <div className="flex items-center gap-1.5 text-right shrink-0">
+                          {onViewDispatchRecords && s.recordCount > 0 && (
+                            <button
+                              type="button"
+                              data-html2canvas-ignore="true"
+                              data-capture-ignore="true"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onViewDispatchRecords(s.rawName);
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black shadow-xs transition-all active:scale-95 cursor-pointer"
+                              title={`${s.displayName}의 당일 파견기록 확인`}
+                            >
+                              <CheckCircle2 className="w-3 h-3 shrink-0" />
+                              체크
+                            </button>
+                          )}
                           <span
                             className={cn(
                               "inline-block font-black px-2 py-0.5 rounded-lg text-xs text-white shadow-2xs",
@@ -1312,10 +1380,13 @@ export function SettlementView({
                         return (
                           <tr
                             key={`desktop-${s.rawName}`}
+                            data-settlement-staff-name={s.rawName}
                             onClick={() => onStaffPaymentClick(s.rawName)}
                             className={cn(
                               "hover:bg-stone-50/80 transition-colors cursor-pointer group",
                               s.isOff && "opacity-60 bg-stone-50/30",
+                              highlightedNavigationStaff === s.rawName &&
+                                "ring-4 ring-inset ring-indigo-500 bg-indigo-50",
                             )}
                           >
                             {/* Staff Full Name & Status */}
@@ -1324,6 +1395,22 @@ export function SettlementView({
                                 <span className="font-bold text-stone-900 group-hover:text-indigo-600 transition-colors text-sm whitespace-nowrap">
                                   {s.displayName}
                                 </span>
+                                {onViewDispatchRecords && s.recordCount > 0 && (
+                                  <button
+                                    type="button"
+                                    data-html2canvas-ignore="true"
+                                    data-capture-ignore="true"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      onViewDispatchRecords(s.rawName);
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black shadow-xs transition-all active:scale-95 cursor-pointer"
+                                    title={`${s.displayName}의 당일 파견기록 확인`}
+                                  >
+                                    <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                    체크
+                                  </button>
+                                )}
                                 {s.isOff && (
                                   <span className="text-[9px] font-bold bg-stone-100 text-stone-400 px-1 py-0.5 rounded whitespace-nowrap">
                                     퇴근
