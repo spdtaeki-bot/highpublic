@@ -245,6 +245,78 @@ const getErrorMessage = (
   }
 };
 
+type DailyRecordCollectionState = {
+  state: "paid" | "partial" | "unpaid";
+  paymentMethod?: PaymentMethod;
+};
+
+const calculateDailyCollectionSummary = (records: DispatchRecord[]) => {
+  const recordsByEstablishment = new Map<string, DispatchRecord[]>();
+  records.forEach((record) => {
+    const key = record.establishmentName || "";
+    const group = recordsByEstablishment.get(key) || [];
+    group.push(record);
+    recordsByEstablishment.set(key, group);
+  });
+
+  let cashAmount = 0;
+  let transferAmount = 0;
+  let unpaidAmount = 0;
+  const recordStates: Record<string, DailyRecordCollectionState> = {};
+
+  recordsByEstablishment.forEach((establishmentRecords) => {
+    const calculation = calculateEstablishmentCollection(establishmentRecords);
+    unpaidAmount += calculation.unpaidAmount;
+
+    const sources = calculation.roundBreakdown.flatMap((round) => round.sources);
+    sources.forEach((source) => {
+      if (source.paymentMethod === "CASH") {
+        cashAmount += source.amount || 0;
+      } else if (source.paymentMethod === "TRANSFER") {
+        transferAmount += source.amount || 0;
+      }
+    });
+
+    const sharedAmount = sources
+      .filter((source) => source.isShared)
+      .reduce((sum, source) => sum + (source.amount || 0), 0);
+
+    establishmentRecords.forEach((record) => {
+      if (!record.id) return;
+      const ownSources = sources.filter(
+        (source) =>
+          !source.isShared &&
+          source.refs.some((ref) => ref.recordId === record.id),
+      );
+      const ownAmount = ownSources.reduce(
+        (sum, source) => sum + (source.amount || 0),
+        0,
+      );
+      const ownMethod =
+        ownSources.find((source) => source.paymentMethod)?.paymentMethod;
+
+      if (
+        calculation.isFullyPaid ||
+        (record.totalAmount > 0 && ownAmount >= record.totalAmount)
+      ) {
+        recordStates[record.id] = {
+          state: "paid",
+          paymentMethod: ownMethod || record.paymentMethod,
+        };
+      } else if (ownAmount > 0 || sharedAmount > 0) {
+        recordStates[record.id] = {
+          state: "partial",
+          paymentMethod: ownMethod,
+        };
+      } else {
+        recordStates[record.id] = { state: "unpaid" };
+      }
+    });
+  });
+
+  return { cashAmount, transferAmount, unpaidAmount, recordStates };
+};
+
 // getRecordCollectionHistory imported from ./lib/utils
 
 
@@ -1997,24 +2069,16 @@ export default function App() {
     return () => clearInterval(keepAlive);
   }, []);
 
+  const dailyCollectionSummary = useMemo(
+    () => calculateDailyCollectionSummary(records),
+    [records],
+  );
+
   const stats = useMemo(() => {
     const totalRevenue = records.reduce((sum, r) => sum + r.totalAmount, 0);
-    const todayUnpaidAmount = records
-      .filter((r) => {
-        if (r.paymentMethod !== "UNPAID") return false;
-        const start = r.startTime.toDate
-          ? r.startTime.toDate()
-          : new Date(r.startTime);
-        const end = r.endTime.toDate ? r.endTime.toDate() : new Date(r.endTime);
-        return start.getTime() !== end.getTime();
-      })
-      .reduce((sum, r) => sum + r.totalAmount, 0);
-    const todayCashAmount = records
-      .filter((r) => r.paymentMethod === "CASH")
-      .reduce((sum, r) => sum + r.totalAmount, 0);
-    const todayTransferAmount = records
-      .filter((r) => r.paymentMethod === "TRANSFER")
-      .reduce((sum, r) => sum + r.totalAmount, 0);
+    const todayUnpaidAmount = dailyCollectionSummary.unpaidAmount;
+    const todayCashAmount = dailyCollectionSummary.cashAmount;
+    const todayTransferAmount = dailyCollectionSummary.transferAmount;
     const totalStaffPayment = records.reduce(
       (sum, r) => sum + r.staffPayment,
       0,
@@ -2142,6 +2206,7 @@ export default function App() {
     unpaidStaffRecords,
     manualDailyProfits,
     selectedDate,
+    dailyCollectionSummary,
   ]);
 
   const activeStaffStats = useMemo(() => {
@@ -6528,6 +6593,11 @@ function ListView({
   onBounceBadgeClick?: (staffName: string) => void;
   weeklyAttendanceMap?: Record<string, number>;
 }) {
+  const dailyCollectionSummary = useMemo(
+    () => calculateDailyCollectionSummary(records),
+    [records],
+  );
+
   // Group by staff
   const staffGroups = useMemo(() => {
     const groups: Record<string, any> = {};
@@ -6641,7 +6711,14 @@ function ListView({
         if (isBanti) group.hopperBanti += 1;
       }
 
-      if (record.paymentMethod === "UNPAID") {
+      const collectionState = record.id
+        ? dailyCollectionSummary.recordStates[record.id]?.state
+        : undefined;
+      if (
+        collectionState === "unpaid" ||
+        collectionState === "partial" ||
+        (!collectionState && record.paymentMethod === "UNPAID")
+      ) {
         group.totalUnpaid += record.totalAmount;
       } else {
         group.totalPaid += record.totalAmount;
@@ -6667,7 +6744,15 @@ function ListView({
     });
 
     return groups;
-  }, [records, unpaidStaffRecords, staff, checkInTimes, manualDailyProfits, bouncedRecords]);
+  }, [
+    records,
+    unpaidStaffRecords,
+    staff,
+    checkInTimes,
+    manualDailyProfits,
+    bouncedRecords,
+    dailyCollectionSummary,
+  ]);
 
   const staffNames = useMemo(() => {
     return Object.keys(staffGroups).sort((a, b) => {
@@ -7301,6 +7386,12 @@ function ListView({
                     return getOffset(a.startTime) - getOffset(b.startTime);
                   })
                   .map((record) => {
+                    const collectionDisplay = record.id
+                      ? dailyCollectionSummary.recordStates[record.id]
+                      : undefined;
+                    const collectionState =
+                      collectionDisplay?.state ||
+                      (record.paymentMethod === "UNPAID" ? "unpaid" : "paid");
                     const start = record.startTime.toDate
                       ? record.startTime.toDate()
                       : new Date(record.startTime);
@@ -7422,9 +7513,11 @@ function ListView({
                           "p-2 rounded-xl border shadow-sm cursor-pointer transition-all active:scale-95 relative scroll-mt-24",
                           isOngoing
                             ? "bg-purple-600 border-purple-700 text-white"
-                            : record.paymentMethod === "UNPAID"
+                            : collectionState === "unpaid"
                               ? "bg-red-200 border-red-300"
-                              : "bg-green-100 border-green-200",
+                              : collectionState === "partial"
+                                ? "bg-amber-100 border-amber-300"
+                                : "bg-green-100 border-green-200",
                           highlightedId === record.id
                             ? "ring-4 ring-red-500 shadow-2xl shadow-red-500/40 z-30 animate-pulse"
                             : isOngoing
@@ -7589,18 +7682,25 @@ function ListView({
                               "font-black",
                               isOngoing
                                 ? "text-white"
-                                : record.paymentMethod === "UNPAID"
+                                : collectionState === "unpaid"
                                   ? "text-red-600"
-                                  : "text-green-600",
+                                  : collectionState === "partial"
+                                    ? "text-amber-700"
+                                    : "text-green-600",
                             )}
                           >
-                            {record.paymentMethod === "UNPAID"
+                            {collectionState === "unpaid"
                               ? "미수"
-                              : record.isPass
-                                ? "패스"
-                                : record.paymentMethod === "CASH"
-                                  ? "현금"
-                                  : "계좌"}
+                              : collectionState === "partial"
+                                ? "부분수금"
+                                : record.isPass
+                                  ? "패스"
+                                  : collectionDisplay?.paymentMethod ===
+                                        "CASH" ||
+                                      (!collectionDisplay &&
+                                        record.paymentMethod === "CASH")
+                                    ? "현금"
+                                    : "계좌"}
                           </span>
                         </div>
                       </div>
