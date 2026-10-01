@@ -11687,6 +11687,7 @@ function DispatchFormModal({
     extraFullUnits: editRecord?.extraFullUnits || 0,
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submissionLockRef = useRef(false);
   const [activeTimeField, setActiveTimeField] = useState<
     "startTime" | "endTime"
   >(editRecord ? "endTime" : "startTime");
@@ -12037,6 +12038,7 @@ function DispatchFormModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submissionLockRef.current) return;
     if (formData.staffNames.length === 0) {
       setError("직원을 선택해주세요.");
       return;
@@ -12056,6 +12058,7 @@ function DispatchFormModal({
       return;
     }
 
+    submissionLockRef.current = true;
     setIsSubmitting(true);
     setError(null);
 
@@ -12495,6 +12498,7 @@ function DispatchFormModal({
         `기록 저장 오류: ${getErrorMessage(error, "기록 저장 중 오류가 발생했습니다.")}`,
       );
     } finally {
+      submissionLockRef.current = false;
       setIsSubmitting(false);
     }
   };

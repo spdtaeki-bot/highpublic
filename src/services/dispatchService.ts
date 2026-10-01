@@ -109,6 +109,7 @@ export const testConnection = async () => {
 
 export const checkTimeOverlap = (records: DispatchRecord[], staffName: string, startTime: Date, endTime: Date, excludeIds?: string | string[]) => {
   const excludeIdsArray = Array.isArray(excludeIds) ? excludeIds : (excludeIds ? [excludeIds] : []);
+  const isNewOngoing = startTime.getTime() === endTime.getTime();
   
   return records.some(record => {
     if (record.id && excludeIdsArray.includes(record.id)) return false;
@@ -116,7 +117,14 @@ export const checkTimeOverlap = (records: DispatchRecord[], staffName: string, s
     
     const rStart = record.startTime.toDate ? record.startTime.toDate() : new Date(record.startTime);
     const rEnd = record.endTime.toDate ? record.endTime.toDate() : new Date(record.endTime);
-    
+    const isExistingOngoing = rStart.getTime() === rEnd.getTime();
+
+    if (isExistingOngoing) {
+      return isNewOngoing || endTime > rStart;
+    }
+    if (isNewOngoing) {
+      return rEnd > startTime;
+    }
     return (startTime < rEnd) && (endTime > rStart);
   });
 };
@@ -765,6 +773,16 @@ export const addDispatch = async (data: Omit<DispatchRecord, 'id' | 'uid' | 'cre
     );
     const snapshot = await getDocs(q);
     const existingRecords = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DispatchRecord));
+    const start = data.startTime instanceof Date
+      ? data.startTime
+      : (data.startTime.toDate ? data.startTime.toDate() : new Date(data.startTime));
+    const end = data.endTime instanceof Date
+      ? data.endTime
+      : (data.endTime.toDate ? data.endTime.toDate() : new Date(data.endTime));
+
+    if (checkTimeOverlap(existingRecords, data.staffName, start, end)) {
+      throw new Error(`${data.staffName} 직원의 같은 시간대 파견기록이 이미 존재합니다.`);
+    }
 
     const stats = calculateDispatchStats(data as any, existingRecords);
 
@@ -780,7 +798,17 @@ export const addDispatch = async (data: Omit<DispatchRecord, 'id' | 'uid' | 'cre
     // Filter out undefined fields recursively
     const cleanRecord = sanitizeForFirestore(record);
 
-    await addDoc(collection(db, COLLECTION_NAME), cleanRecord);
+    // 같은 저장 요청이 렉/더블클릭으로 동시에 들어와도 동일 문서 ID를 사용하여
+    // 두 개의 문서가 생기지 않도록 생성 작업을 멱등 처리한다.
+    const safeStaffKey = encodeURIComponent(data.staffName.trim());
+    const dispatchId = [
+      FIXED_UID,
+      data.date,
+      safeStaffKey,
+      start.getTime(),
+      end.getTime(),
+    ].join('_');
+    await setDoc(doc(db, COLLECTION_NAME, dispatchId), cleanRecord);
     await addEstablishment(data.establishmentName);
     await syncStaffDailyStats(data.staffName, data.date);
   } catch (error) {
@@ -830,6 +858,16 @@ export const updateDispatch = async (id: string, data: Partial<DispatchRecord>) 
         ...docData,
         ...data
       };
+      const start = fullData.startTime instanceof Date
+        ? fullData.startTime
+        : (fullData.startTime.toDate ? fullData.startTime.toDate() : new Date(fullData.startTime));
+      const end = fullData.endTime instanceof Date
+        ? fullData.endTime
+        : (fullData.endTime.toDate ? fullData.endTime.toDate() : new Date(fullData.endTime));
+
+      if (checkTimeOverlap(existingRecords, staffName, start, end)) {
+        throw new Error(`${staffName} 직원의 같은 시간대 파견기록이 이미 존재합니다.`);
+      }
 
       const stats = calculateDispatchStats(fullData as any, existingRecords);
       updateData = { ...updateData, ...stats };

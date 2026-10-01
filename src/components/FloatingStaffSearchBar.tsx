@@ -139,7 +139,11 @@ export function FloatingStaffSearchBar({
             setSearchTerm(e.target.value);
             setIsOpen(true);
           }}
-          onFocus={() => setIsOpen(true)}
+          onFocus={(e) => {
+            setIsOpen(true);
+            e.currentTarget.select();
+          }}
+          onClick={(e) => e.currentTarget.select()}
           onKeyDown={handleKeyDown}
           placeholder="직원 이름 검색..."
           className="min-w-0 flex-1 bg-transparent text-xs sm:text-sm font-bold text-white placeholder:text-stone-400 placeholder:font-medium focus:outline-none py-1"
