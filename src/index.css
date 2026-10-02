@@ -23,6 +23,54 @@ html, body {
 }
 
 @layer base {
+  :where(
+    input:not(
+      [type="button"],
+      [type="submit"],
+      [type="reset"],
+      [type="checkbox"],
+      [type="radio"],
+      [type="range"],
+      [type="color"],
+      [type="file"],
+      [type="hidden"]
+    ),
+    textarea,
+    select
+  ) {
+    border-width: 2px !important;
+    border-color: #57534e !important;
+    box-shadow:
+      0 0 0 2px rgb(99 102 241 / 0.12),
+      0 2px 4px rgb(28 25 23 / 0.1) !important;
+  }
+
+  :where(
+    input:not(
+      [type="button"],
+      [type="submit"],
+      [type="reset"],
+      [type="checkbox"],
+      [type="radio"],
+      [type="range"],
+      [type="color"],
+      [type="file"],
+      [type="hidden"]
+    ),
+    textarea,
+    select
+  ):focus {
+    border-color: #4f46e5 !important;
+    box-shadow:
+      0 0 0 3px rgb(99 102 241 / 0.25),
+      0 3px 7px rgb(28 25 23 / 0.14) !important;
+  }
+
+  :where(input, textarea, select):disabled {
+    border-color: #a8a29e !important;
+    box-shadow: none !important;
+  }
+
   input[type="time"]::-webkit-calendar-picker-indicator {
     display: none !important;
     -webkit-appearance: none;

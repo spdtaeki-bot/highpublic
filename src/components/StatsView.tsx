@@ -1258,13 +1258,13 @@ export const StatsView: React.FC<StatsViewProps> = ({
           <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
             {/* Search Input */}
             <div className="relative flex-1 max-w-md">
-              <Search className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <Search className="w-4 h-4 text-stone-600 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="직원 이름 또는 소속 검색 (예: 시아, 베리, 시크)..."
-                className="w-full h-10 pl-9 pr-8 text-xs sm:text-sm rounded-xl bg-stone-50 border border-stone-200 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none transition-all font-medium"
+                className="w-full h-10 pl-9 pr-8 text-xs sm:text-sm rounded-xl bg-white border-2 border-stone-400 shadow-sm placeholder:text-stone-500 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-200 outline-none transition-all font-medium"
               />
               {searchTerm && (
                 <button
