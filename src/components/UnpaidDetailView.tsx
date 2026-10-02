@@ -304,8 +304,10 @@ export function UnpaidDetailView({
     method: PaymentMethod;
   } | null>(null);
 
-  const [batchAdditionalCollectingKey, setBatchAdditionalCollectingKey] =
-    useState<string | null>(null);
+  const [batchAdditionalCollecting, setBatchAdditionalCollecting] = useState<{
+    dateKey: string;
+    estName: string;
+  } | null>(null);
 
   // Screenshot Capture State
   const [isCapturing, setIsCapturing] = useState<string | null>(null);
@@ -526,6 +528,18 @@ export function UnpaidDetailView({
 
     return rawGroups;
   }, [combinedRecords]);
+
+  const activeBatchCollection = batchCollecting
+    ? dateEstablishmentGroups[batchCollecting.dateKey]?.[
+        batchCollecting.estName
+      ]
+    : null;
+
+  const activeAdditionalCollection = batchAdditionalCollecting
+    ? dateEstablishmentGroups[batchAdditionalCollecting.dateKey]?.[
+        batchAdditionalCollecting.estName
+      ]
+    : null;
 
   // Overall Totals
   const overallStats = useMemo(() => {
@@ -929,7 +943,7 @@ export function UnpaidDetailView({
       await Promise.all(
         updates.map(({ id, updates: u }) => applyRecordUpdate(id, u)),
       );
-      setBatchAdditionalCollectingKey(null);
+      setBatchAdditionalCollecting(null);
     } catch (e) {
       console.error("추가 수금 처리 중 오류:", e);
       setAlertConfig({
@@ -1525,14 +1539,6 @@ export function UnpaidDetailView({
                       // Calculate breakdown of rounds (1차 수금, 2차 수금, etc.)
                       const estRoundBreakdown = est.roundBreakdown;
 
-                      const isBatchCollectingActive =
-                        batchCollecting?.dateKey === date &&
-                        batchCollecting?.estName === est.estName;
-
-                      const isBatchAdditionalActive =
-                        batchAdditionalCollectingKey ===
-                        `${date}_${est.estName}`;
-
                       const cardId = `unpaid-est-card-${date}-${encodeURIComponent(est.estName).replace(/%/g, "_")}`;
 
                       return (
@@ -1590,70 +1596,55 @@ export function UnpaidDetailView({
 
                               {/* Batch Action Buttons & Capture Button */}
                               <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
-                                {isBatchCollectingActive ? (
-                                  <button
-                                    data-html2canvas-ignore="true"
-                                    data-capture-ignore="true"
-                                    onClick={() => setBatchCollecting(null)}
-                                    className="px-2.5 py-1.5 bg-stone-200 text-stone-700 rounded-xl text-xs font-black shadow-2xs hover:bg-stone-300 transition-all cursor-pointer"
-                                  >
-                                    ✕ 닫기
-                                  </button>
-                                ) : (
+                                {est.records.some(
+                                  (r) => r.paymentMethod === "UNPAID",
+                                ) && (
                                   <>
-                                    {est.records.some(
-                                      (r) => r.paymentMethod === "UNPAID",
-                                    ) && (
-                                      <>
-                                        <button
-                                          data-html2canvas-ignore="true"
-                                          data-capture-ignore="true"
-                                          onClick={() =>
-                                            setBatchCollecting({
-                                              dateKey: date,
-                                              estName: est.estName,
-                                              method: "CASH",
-                                            })
-                                          }
-                                          className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
-                                        >
-                                          현금전체
-                                        </button>
-                                        <button
-                                          data-html2canvas-ignore="true"
-                                          data-capture-ignore="true"
-                                          onClick={() =>
-                                            setBatchCollecting({
-                                              dateKey: date,
-                                              estName: est.estName,
-                                              method: "TRANSFER",
-                                            })
-                                          }
-                                          className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
-                                        >
-                                          계좌전체
-                                        </button>
-                                      </>
-                                    )}
-
                                     <button
-                                      type="button"
                                       data-html2canvas-ignore="true"
                                       data-capture-ignore="true"
-                                      onClick={() => {
-                                        const key = `${date}_${est.estName}`;
-                                        setBatchAdditionalCollectingKey(
-                                          batchAdditionalCollectingKey === key
-                                            ? null
-                                            : key,
-                                        );
-                                      }}
-                                      className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
+                                      onClick={() =>
+                                        setBatchCollecting({
+                                          dateKey: date,
+                                          estName: est.estName,
+                                          method: "CASH",
+                                        })
+                                      }
+                                      className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
                                     >
-                                      ➕ 추가수금/조정
+                                      현금전체
+                                    </button>
+                                    <button
+                                      data-html2canvas-ignore="true"
+                                      data-capture-ignore="true"
+                                      onClick={() =>
+                                        setBatchCollecting({
+                                          dateKey: date,
+                                          estName: est.estName,
+                                          method: "TRANSFER",
+                                        })
+                                      }
+                                      className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
+                                    >
+                                      계좌전체
                                     </button>
                                   </>
                                 )}
+
+                                <button
+                                  type="button"
+                                  data-html2canvas-ignore="true"
+                                  data-capture-ignore="true"
+                                  onClick={() => {
+                                    setBatchAdditionalCollecting({
+                                      dateKey: date,
+                                      estName: est.estName,
+                                    });
+                                  }}
+                                  className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
+                                >
+                                  ➕ 추가수금/조정
+                                </button>
 
                                 {(hasAnyCollection ||
                                   estTotalCollected > 0 ||
@@ -1762,88 +1753,6 @@ export function UnpaidDetailView({
                               )}
                             </div>
                           </div>
-
-                          {/* Batch Collect Form Modal / Inline Box */}
-                          {isBatchCollectingActive && (
-                            <div
-                              data-html2canvas-ignore="true"
-                              data-capture-ignore="true"
-                              className="p-4 bg-stone-50 border-b border-stone-200"
-                            >
-                              <BatchCollectForm
-                                initialMethod={batchCollecting.method}
-                                totalUnpaidAmount={est.records
-                                  .filter((r) => r.paymentMethod === "UNPAID")
-                                  .reduce(
-                                    (sum, r) => sum + (r.totalAmount || 0),
-                                    0,
-                                  )}
-                                onCollect={(
-                                  method,
-                                  dateStr,
-                                  timeStr,
-                                  depositorName,
-                                  customAmount,
-                                ) => {
-                                  handleBatchCollect(
-                                    est.records,
-                                    method,
-                                    dateStr,
-                                    timeStr,
-                                    false,
-                                    depositorName,
-                                    false,
-                                    customAmount,
-                                  );
-                                }}
-                                onPass={(method) =>
-                                  handleBatchCollect(
-                                    est.records,
-                                    method,
-                                    "",
-                                    "",
-                                    true,
-                                  )
-                                }
-                                onCancel={() => setBatchCollecting(null)}
-                              />
-                            </div>
-                          )}
-
-                          {/* Batch Additional Collect Form */}
-                          {isBatchAdditionalActive && (
-                            <div
-                              data-html2canvas-ignore="true"
-                              data-capture-ignore="true"
-                              className="p-4 border-b border-amber-200 bg-amber-50/60"
-                            >
-                              <EstablishmentAdditionalCollectForm
-                                estName={est.estName}
-                                originalTotal={estTotalRequested}
-                                currentCollected={estTotalCollected}
-                                onCollectAdditional={(
-                                  method,
-                                  additionalAmount,
-                                  depositorName,
-                                  collectedDate,
-                                  collectedTime,
-                                ) => {
-                                  handleAdditionalCollect(
-                                    est.estName,
-                                    est.records,
-                                    method,
-                                    additionalAmount,
-                                    depositorName,
-                                    collectedDate,
-                                    collectedTime,
-                                  );
-                                }}
-                                onCancel={() =>
-                                  setBatchAdditionalCollectingKey(null)
-                                }
-                              />
-                            </div>
-                          )}
 
                           {/* Dispatch Records List inside Establishment */}
                           <div className="p-3 sm:p-4 space-y-2.5 divide-y divide-stone-100">
@@ -2210,6 +2119,147 @@ export function UnpaidDetailView({
 
       {/* Internal Modals */}
       <AnimatePresence>
+        {batchCollecting && activeBatchCollection && (
+          <div
+            className="fixed inset-0 z-[90] flex items-center justify-center p-3 sm:p-4"
+            data-html2canvas-ignore="true"
+            data-capture-ignore="true"
+          >
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setBatchCollecting(null)}
+              className="absolute inset-0 bg-stone-900/60 backdrop-blur-xs"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative z-10 w-full max-w-xl max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-3xl bg-white p-3 sm:p-4 shadow-2xl"
+            >
+              <div className="mb-3 flex items-center justify-between gap-3 px-1">
+                <div className="min-w-0">
+                  <p className="truncate text-base font-black text-stone-900">
+                    {batchCollecting.estName}
+                  </p>
+                  <p className="text-xs font-bold text-stone-500">
+                    {batchCollecting.dateKey} 일괄 수금
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBatchCollecting(null)}
+                  className="shrink-0 rounded-xl bg-stone-100 p-2 text-stone-600 transition-colors hover:bg-stone-200 cursor-pointer"
+                  aria-label="일괄 수금 창 닫기"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <BatchCollectForm
+                initialMethod={batchCollecting.method}
+                totalUnpaidAmount={activeBatchCollection.records
+                  .filter((r) => r.paymentMethod === "UNPAID")
+                  .reduce((sum, r) => sum + (r.totalAmount || 0), 0)}
+                onCollect={(
+                  method,
+                  dateStr,
+                  timeStr,
+                  depositorName,
+                  customAmount,
+                ) => {
+                  handleBatchCollect(
+                    activeBatchCollection.records,
+                    method,
+                    dateStr,
+                    timeStr,
+                    false,
+                    depositorName,
+                    false,
+                    customAmount,
+                  );
+                }}
+                onPass={(method) =>
+                  handleBatchCollect(
+                    activeBatchCollection.records,
+                    method,
+                    "",
+                    "",
+                    true,
+                  )
+                }
+                onCancel={() => setBatchCollecting(null)}
+              />
+            </motion.div>
+          </div>
+        )}
+
+        {batchAdditionalCollecting && activeAdditionalCollection && (
+          <div
+            className="fixed inset-0 z-[90] flex items-center justify-center p-3 sm:p-4"
+            data-html2canvas-ignore="true"
+            data-capture-ignore="true"
+          >
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setBatchAdditionalCollecting(null)}
+              className="absolute inset-0 bg-stone-900/60 backdrop-blur-xs"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative z-10 w-full max-w-xl max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-3xl bg-white p-3 sm:p-4 shadow-2xl"
+            >
+              <div className="mb-3 flex items-center justify-between gap-3 px-1">
+                <div className="min-w-0">
+                  <p className="truncate text-base font-black text-stone-900">
+                    {batchAdditionalCollecting.estName}
+                  </p>
+                  <p className="text-xs font-bold text-stone-500">
+                    {batchAdditionalCollecting.dateKey} 추가 수금/조정
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBatchAdditionalCollecting(null)}
+                  className="shrink-0 rounded-xl bg-stone-100 p-2 text-stone-600 transition-colors hover:bg-stone-200 cursor-pointer"
+                  aria-label="추가 수금/조정 창 닫기"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <EstablishmentAdditionalCollectForm
+                estName={batchAdditionalCollecting.estName}
+                originalTotal={activeAdditionalCollection.totalRequested}
+                currentCollected={activeAdditionalCollection.totalCollected}
+                onCollectAdditional={(
+                  method,
+                  additionalAmount,
+                  depositorName,
+                  collectedDate,
+                  collectedTime,
+                ) => {
+                  handleAdditionalCollect(
+                    batchAdditionalCollecting.estName,
+                    activeAdditionalCollection.records,
+                    method,
+                    additionalAmount,
+                    depositorName,
+                    collectedDate,
+                    collectedTime,
+                  );
+                }}
+                onCancel={() => setBatchAdditionalCollecting(null)}
+              />
+            </motion.div>
+          </div>
+        )}
+
         {confirmConfig && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div
