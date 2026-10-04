@@ -16,7 +16,8 @@ import {
   arrayUnion,
   arrayRemove,
   deleteField,
-  FieldValue
+  FieldValue,
+  runTransaction
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { DispatchRecord, BouncedRecord, SYSTEM_RATES, COMMISSION_RATE, SystemType, StaffType, ActiveChoice } from '../types';
@@ -894,6 +895,47 @@ export const updateDispatch = async (id: string, data: Partial<DispatchRecord>) 
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `${COLLECTION_NAME}/${id}`);
+  }
+};
+
+/**
+ * 소속 일괄지급 전용 처리.
+ * 실행 시점의 서버 데이터를 트랜잭션으로 다시 읽고 미지급 기록만 갱신한다.
+ * 이미 지급된 기록의 지급수단과 지급시각은 절대 덮어쓰지 않는다.
+ */
+export const payUnpaidDispatches = async (
+  ids: string[],
+  method: 'CASH' | 'TRANSFER',
+  paidAt: Timestamp,
+): Promise<number> => {
+  const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+  if (uniqueIds.length === 0) return 0;
+
+  try {
+    return await runTransaction(db, async (transaction) => {
+      const refs = uniqueIds.map((id) => doc(db, COLLECTION_NAME, id));
+      const snapshots = await Promise.all(
+        refs.map((docRef) => transaction.get(docRef)),
+      );
+
+      let updatedCount = 0;
+      snapshots.forEach((snapshot, index) => {
+        if (!snapshot.exists()) return;
+        const current = snapshot.data() as DispatchRecord;
+        if (current.isStaffPaid === true) return;
+
+        transaction.update(refs[index], {
+          isStaffPaid: true,
+          staffPaymentMethod: method,
+          staffPaidAt: paidAt,
+        });
+        updatedCount += 1;
+      });
+
+      return updatedCount;
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, COLLECTION_NAME);
   }
 };
 

@@ -18,7 +18,10 @@ import * as htmlToImage from "html-to-image";
 import { format, parseISO } from "date-fns";
 import { ko } from "date-fns/locale";
 import { DispatchRecord, Staff, BouncedRecord } from "../types";
-import { updateDispatch } from "../services/dispatchService";
+import {
+  payUnpaidDispatches,
+  updateDispatch,
+} from "../services/dispatchService";
 import { Timestamp } from "firebase/firestore";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -554,14 +557,14 @@ export function SettlementView({
     if (!activeBatchGroup) return;
     setIsBatchProcessing(true);
     try {
-      const recordsToUpdate = activeBatchGroup.allRecords;
-      if (recordsToUpdate.length === 0) {
+      const allRecords = activeBatchGroup.allRecords;
+      if (allRecords.length === 0) {
         alert("해당 소속에 처리할 파견 내역이 없습니다.");
         return;
       }
 
       if (method === "CANCEL") {
-        const promises = recordsToUpdate.map((r) =>
+        const promises = allRecords.map((r) =>
           updateDispatch(r.id!, {
             isStaffPaid: false,
             staffPaymentMethod: null,
@@ -570,15 +573,18 @@ export function SettlementView({
         );
         await Promise.all(promises);
       } else {
+        // 화면 상태가 오래되었더라도 서버의 최신 지급상태를 트랜잭션에서 다시 확인한다.
+        // 이미 지급된 기록은 건드리지 않고 현재 미지급 기록만 동일 시각으로 지급 처리한다.
         const paidAt = Timestamp.now();
-        const promises = recordsToUpdate.map((r) =>
-          updateDispatch(r.id!, {
-            isStaffPaid: true,
-            staffPaymentMethod: method,
-            staffPaidAt: paidAt,
-          }),
+        const updatedCount = await payUnpaidDispatches(
+          allRecords.flatMap((r) => (r.id ? [r.id] : [])),
+          method,
+          paidAt,
         );
-        await Promise.all(promises);
+        if (updatedCount === 0) {
+          alert("현재 미지급 상태인 파견 내역이 없습니다.");
+          return;
+        }
       }
       setBatchModalAffiliation(null);
     } catch (err) {
