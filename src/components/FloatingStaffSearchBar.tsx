@@ -44,17 +44,20 @@ export function FloatingStaffSearchBar({
   // Filtered staff list
   const filteredStaff = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    
-    // Sort staff: working first, then alphabetical
-    const sorted = [...staff].sort((a, b) => {
+
+    // 검색 목록은 선택한 날짜에 출근 처리된 직원만 표시한다.
+    // 퇴근한 직원도 해당 날짜의 출근자이므로 목록에는 유지한다.
+    const sorted = staff
+      .filter((s) => Boolean(s.id && workingStaffIds.includes(s.id)))
+      .sort((a, b) => {
       const aWorking = workingStaffIds.includes(a.id!) && !offStaffIds.includes(a.id!);
       const bWorking = workingStaffIds.includes(b.id!) && !offStaffIds.includes(b.id!);
       if (aWorking && !bWorking) return -1;
       if (!aWorking && bWorking) return 1;
       return a.name.localeCompare(b.name);
-    });
+      });
 
-    if (!term) return sorted;
+    if (!term) return [];
     return sorted.filter((s) => s.name.toLowerCase().includes(term));
   }, [staff, searchTerm, workingStaffIds, offStaffIds]);
 
@@ -192,10 +195,10 @@ export function FloatingStaffSearchBar({
         </button>
 
         {/* Suggestions Popover floating above */}
-        {isOpen && (
+        {isOpen && searchTerm.trim() && (
           <div className="absolute bottom-full mb-2.5 left-0 right-0 bg-stone-900/95 text-white backdrop-blur-xl border border-stone-700/90 shadow-2xl rounded-2xl p-2 max-h-72 overflow-y-auto space-y-1 z-50 scrollbar-thin animate-in slide-in-from-bottom-2 duration-150">
             <div className="px-2 py-1 text-[10px] font-black text-stone-400 flex items-center justify-between border-b border-stone-800 mb-1">
-              <span>인원현황 검색 결과 ({filteredStaff.length}명)</span>
+              <span>출근자 검색 결과 ({filteredStaff.length}명)</span>
               <span className="text-[9px] text-stone-500">클릭 시 인원현황표로 이동</span>
             </div>
 

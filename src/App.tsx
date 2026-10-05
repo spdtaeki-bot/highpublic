@@ -706,6 +706,8 @@ export default function App() {
   const [highlightedStaffColumn, setHighlightedStaffColumn] = useState<
     string | null
   >(null);
+  const [highlightedAttendanceStaffNames, setHighlightedAttendanceStaffNames] =
+    useState<Set<string>>(new Set());
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [pendingDispatchFocus, setPendingDispatchFocus] = useState<{
     recordId: string;
@@ -847,6 +849,14 @@ export default function App() {
       return () => clearTimeout(timer);
     }
   }, [highlightedId]);
+
+  useEffect(() => {
+    if (highlightedAttendanceStaffNames.size === 0) return;
+    const timer = setTimeout(() => {
+      setHighlightedAttendanceStaffNames(new Set());
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [highlightedAttendanceStaffNames]);
 
   useEffect(() => {
     if (
@@ -3534,31 +3544,25 @@ export default function App() {
 
                             const groupOffCount = list.filter((s) => offStaffIds.includes(s.id!)).length;
                             const groupRemainingCount = list.length - groupOffCount;
-                            const isGroupCapturedAfterAllOff =
-                              groupRemainingCount === 0 &&
-                              hasCompletedAllOffCapture(
-                                groupLabel,
-                                list.map((s) => s.name),
-                              );
-
                             return (
                               <div key={group} className="space-y-2">
                                 <div className="flex items-center gap-1.5 flex-wrap">
-                                  {/* Group overall capture badge */}
+                                  {/* Group staff highlight badge */}
                                   <button
                                     type="button"
-                                    onClick={() => handleGroupCapture(groupLabel, list.map((s) => s.name))}
+                                    onClick={() =>
+                                      setHighlightedAttendanceStaffNames(
+                                        new Set(list.map((s) => s.name)),
+                                      )
+                                    }
                                     className={cn(
                                       "px-2 sm:px-2.5 py-1 sm:py-1.5 inline-flex items-center gap-1.5 sm:gap-2 rounded-xl uppercase tracking-wider hover:opacity-85 transition-all cursor-pointer active:scale-95 shadow-2xs text-left leading-none",
                                       groupRemainingCount === 0
                                         ? "text-stone-500 bg-stone-200 border border-stone-300/80"
                                         : groupColor,
-                                      isGroupCapturedAfterAllOff &&
-                                        "border-2 border-black ring-1 ring-black/30 ring-offset-1",
                                     )}
-                                    title={`${groupLabel} 소속: 출근 ${list.length}명 중 ${groupOffCount}명 퇴근 (현재 ${groupRemainingCount}명 남음)${groupRemainingCount === 0 ? " [전원 퇴근]" : ""}${isGroupCapturedAfterAllOff ? " [퇴근 후 캡쳐 완료]" : ""} - 묶음 캡쳐`}
+                                    title={`${groupLabel} 소속 직원 카드 2초간 강조`}
                                   >
-                                    <Camera className="w-3 h-3 sm:w-3.5 sm:h-3.5 opacity-80 shrink-0" />
                                     <span className="font-black text-xs sm:text-sm tracking-tight leading-none shrink-0">
                                       {groupLabel}
                                     </span>
@@ -3616,14 +3620,15 @@ export default function App() {
                                     if (entries.length === 0) return null;
                                     return entries.map(([aff, data]) => {
                                       const isAllOff = data.remaining === 0;
-                                      const isCapturedAfterAllOff =
-                                        isAllOff &&
-                                        hasCompletedAllOffCapture(aff, data.names);
                                       return (
                                         <button
                                           key={aff}
                                           type="button"
-                                          onClick={() => handleGroupCapture(aff, data.names)}
+                                          onClick={() =>
+                                            setHighlightedAttendanceStaffNames(
+                                              new Set(data.names),
+                                            )
+                                          }
                                           className={cn(
                                             "px-2 py-1 rounded-xl text-white active:scale-95 flex items-center gap-1.5 text-left shadow-2xs leading-none transition-all cursor-pointer",
                                             isAllOff
@@ -3631,12 +3636,9 @@ export default function App() {
                                               : aff === "직속"
                                                 ? "bg-amber-500 hover:bg-amber-600 hover:opacity-95"
                                                 : "bg-purple-600 hover:bg-purple-700 hover:opacity-95",
-                                            isCapturedAfterAllOff &&
-                                              "border-2 border-black ring-1 ring-black/30 ring-offset-1"
                                           )}
-                                          title={`${aff} 소속: 출근 ${data.total}명 중 ${data.off}명 퇴근 (현재 ${data.remaining}명 남음)${isAllOff ? " [전원 퇴근]" : ""}${isCapturedAfterAllOff ? " [퇴근 후 캡쳐 완료]" : ""} - 묶음 캡쳐`}
+                                          title={`${aff} 소속 직원 카드 2초간 강조`}
                                         >
-                                          <Camera className="w-3 h-3 opacity-90 shrink-0" />
                                           <span className="font-black text-xs tracking-tight leading-none shrink-0">
                                             {aff}
                                           </span>
@@ -3730,6 +3732,10 @@ export default function App() {
                                           "px-1 py-1 sm:py-1.5 sm:px-2 rounded-xl border-2 flex flex-col items-center justify-center text-center relative transition-all active:scale-95 active:bg-stone-50 select-none overflow-hidden min-w-0",
                                           highlightedStaffColumn === s.name &&
                                             "ring-4 ring-red-500 shadow-[0_0_15px_rgba(239,68,68,0.6)] z-30 animate-pulse",
+                                          highlightedAttendanceStaffNames.has(
+                                            s.name,
+                                          ) &&
+                                            "ring-4 ring-cyan-400 ring-offset-2 shadow-[0_0_18px_rgba(34,211,238,0.7)] z-30 scale-[1.03] opacity-100",
                                           multiSelected.includes(s.name) &&
                                             "ring-2 ring-blue-500 border-blue-500 bg-blue-50/50 shadow-md transform scale-[1.02]",
                                           !multiSelected.includes(s.name) &&
@@ -5122,7 +5128,7 @@ function StatusStaffModal({
                             onClick={() => onGroupCapture?.(aff, data.names)}
                             className={cn(
                               "px-1.5 py-0.5 rounded text-[10px] font-extrabold leading-none shadow-2xs text-white flex items-center gap-1 hover:opacity-90 active:scale-95 transition-all cursor-pointer",
-                              aff === "직속" ? "bg-amber-500 hover:bg-amber-600" : "bg-purple-600 hover:bg-purple-700"
+                              aff === "직속" ? "bg-amber-500 hover:bg-amber-600" : "bg-purple-600 hover:bg-purple-700",
                             )}
                             title={`${aff} 소속 직원 (${data.count}명) 묶음 캡쳐 공유`}
                           >
@@ -5486,6 +5492,8 @@ function StatusStaffModal({
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
+                onFocus={(e) => e.currentTarget.select()}
+                onClick={(e) => e.currentTarget.select()}
                 placeholder="직원 이름으로 검색..."
                 className="w-full bg-white border border-stone-200 rounded-xl pl-9 pr-8 py-2.5 text-xs font-bold text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-900/10 transition-all shadow-xs"
               />
