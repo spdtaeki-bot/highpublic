@@ -1014,6 +1014,19 @@ export const subscribeToUnpaidStaffDispatches = (callback: (records: DispatchRec
   });
 };
 
+export const fetchPaidStaffDispatches = async (): Promise<DispatchRecord[]> => {
+  const q = query(
+    collection(db, COLLECTION_NAME),
+    where('uid', '==', FIXED_UID),
+    where('isStaffPaid', '==', true),
+    orderBy('date', 'desc')
+  );
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map(doc =>
+    normalizeDispatchRecord(doc.id, doc.data())
+  );
+};
+
 export const deleteDispatch = async (id: string) => {
   try {
     const docSnap = await getDoc(doc(db, COLLECTION_NAME, id));

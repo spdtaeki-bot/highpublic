@@ -87,6 +87,7 @@ import {
   subscribeToDispatches,
   subscribeToAllUnpaidDispatches,
   subscribeToUnpaidStaffDispatches,
+  fetchPaidStaffDispatches,
   deleteDispatch,
   addBouncedRecord,
   deleteBouncedRecord,
@@ -7939,7 +7940,16 @@ function DetailBreakdownModal({
   const [searchTerm, setSearchTerm] = useState(initialSearchTerm || "");
   const deferredSearchTerm = useDeferredValue(searchTerm);
   const [showShortageOnly, setShowShortageOnly] = useState(false);
-  const [showUnpaidStaffOnly, setShowUnpaidStaffOnly] = useState(false);
+  const [staffPaymentFilter, setStaffPaymentFilter] = useState<
+    "UNPAID_ONLY" | "INCLUDE_PAID"
+  >("UNPAID_ONLY");
+  const [paidStaffHistoryRecords, setPaidStaffHistoryRecords] = useState<
+    DispatchRecord[]
+  >([]);
+  const [isPaidStaffHistoryLoading, setIsPaidStaffHistoryLoading] =
+    useState(false);
+  const [hasLoadedPaidStaffHistory, setHasLoadedPaidStaffHistory] =
+    useState(false);
   const [batchAdditionalCollectingKey, setBatchAdditionalCollectingKey] = useState<string | null>(null);
 
   const [localRecords, setLocalRecords] = useState<DispatchRecord[]>([]);
@@ -8012,6 +8022,64 @@ function DetailBreakdownModal({
   const shortageCount = shortageEstKeys.size;
 
   useEffect(() => {
+    if (
+      type !== "staffPayment" ||
+      staffPaymentFilter !== "INCLUDE_PAID" ||
+      hasLoadedPaidStaffHistory
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    setIsPaidStaffHistoryLoading(true);
+    fetchPaidStaffDispatches()
+      .then((historyRecords) => {
+        if (cancelled) return;
+
+        const previousNameMap = new Map<string, string>();
+        const validStaffNames = new Set(staff.map((member) => member.name));
+        staff.forEach((member) => {
+          member.previousNames?.forEach((previousName) => {
+            if (previousName?.trim()) {
+              previousNameMap.set(previousName.trim(), member.name);
+            }
+          });
+        });
+
+        setPaidStaffHistoryRecords(
+          historyRecords
+            .map((record) => {
+              const currentName = previousNameMap.get(record.staffName.trim());
+              return currentName
+                ? { ...record, staffName: currentName }
+                : record;
+            })
+            .filter((record) => validStaffNames.has(record.staffName)),
+        );
+        setHasLoadedPaidStaffHistory(true);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("지급완료 내역 불러오기 오류:", error);
+        setAlertConfig({
+          message: "지급완료 내역을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setIsPaidStaffHistoryLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    type,
+    staffPaymentFilter,
+    hasLoadedPaidStaffHistory,
+    staff,
+  ]);
+
+  useEffect(() => {
     if (initialSearchTerm) {
       // Find element and scroll to it - prioritize selected date
       const elementId = `staff-payment-${selectedDate}-${initialSearchTerm}`;
@@ -8062,7 +8130,12 @@ function DetailBreakdownModal({
   // Sync local records to keep them visible even after status changes (for smooth UI)
   useEffect(() => {
     setLocalRecords((prev) => {
-      const combined = [...records, ...unpaidStaffRecords, ...allUnpaidRecords];
+      const combined = [
+        ...records,
+        ...unpaidStaffRecords,
+        ...allUnpaidRecords,
+        ...paidStaffHistoryRecords,
+      ];
       const newMap = new Map(prev.map((r) => [r.id, r]));
 
       combined.forEach((r) => {
@@ -8087,7 +8160,13 @@ function DetailBreakdownModal({
         validStaffNames.has(r.staffName),
       );
     });
-  }, [records, unpaidStaffRecords, allUnpaidRecords, staff]);
+  }, [
+    records,
+    unpaidStaffRecords,
+    allUnpaidRecords,
+    paidStaffHistoryRecords,
+    staff,
+  ]);
 
   const updateLocalRecord = (id: string, updates: Partial<DispatchRecord>) => {
     setLocalRecords((prev) =>
@@ -8715,14 +8794,7 @@ function DetailBreakdownModal({
           return;
 
         const date = r.date;
-        const isToday = date === selectedDate;
-        // Show if:
-        // 1. It's today's record
-        // 2. It's a record that is currently unpaid
-        if (!isToday && r.isStaffPaid) return;
-
-        // If filter is toggled, only show unpaid records
-        if (showUnpaidStaffOnly && r.isStaffPaid) return;
+        if (staffPaymentFilter === "UNPAID_ONLY" && r.isStaffPaid) return;
 
         if (!dateGroups[date]) dateGroups[date] = {};
         if (!dateGroups[date][r.staffName]) {
@@ -8862,7 +8934,7 @@ function DetailBreakdownModal({
     manualDailyProfits,
     deferredSearchTerm,
     showShortageOnly,
-    showUnpaidStaffOnly,
+    staffPaymentFilter,
     shortageEstKeys,
   ]);
 
@@ -9004,22 +9076,22 @@ function DetailBreakdownModal({
             )}
 
             {type === "staffPayment" && (
-              <div className="flex items-center gap-2 pt-0.5">
+              <div className="flex items-center gap-1.5 pt-0.5">
                 <button
                   type="button"
-                  onClick={() => setShowUnpaidStaffOnly(!showUnpaidStaffOnly)}
+                  onClick={() => setStaffPaymentFilter("UNPAID_ONLY")}
                   className={cn(
                     "px-3 py-1.5 rounded-xl font-black text-xs transition-all flex items-center gap-1.5 border shadow-2xs cursor-pointer active:scale-95",
-                    showUnpaidStaffOnly
+                    staffPaymentFilter === "UNPAID_ONLY"
                       ? "bg-red-500 text-white border-red-600 ring-2 ring-red-300"
                       : "bg-white text-stone-600 border-stone-200 hover:bg-stone-100",
                   )}
                 >
-                  <span>🚨 미지급 내역만 우선 보기</span>
+                  <span>🚨 미지급만</span>
                   <span
                     className={cn(
                       "px-1.5 py-0.2 rounded-full text-[10px] font-bold",
-                      showUnpaidStaffOnly
+                      staffPaymentFilter === "UNPAID_ONLY"
                         ? "bg-red-700 text-white"
                         : "bg-stone-100 text-stone-600 border border-stone-200",
                     )}
@@ -9027,6 +9099,23 @@ function DetailBreakdownModal({
                     {unpaidStaffStats.unpaidCount}건
                   </span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setStaffPaymentFilter("INCLUDE_PAID")}
+                  className={cn(
+                    "px-3 py-1.5 rounded-xl font-black text-xs transition-all flex items-center gap-1.5 border shadow-2xs cursor-pointer active:scale-95",
+                    staffPaymentFilter === "INCLUDE_PAID"
+                      ? "bg-emerald-600 text-white border-emerald-700 ring-2 ring-emerald-300"
+                      : "bg-white text-stone-600 border-stone-200 hover:bg-stone-100",
+                  )}
+                >
+                  <span>✓ 지급완료 포함</span>
+                </button>
+                {isPaidStaffHistoryLoading && (
+                  <span className="text-[10px] font-bold text-stone-400 animate-pulse">
+                    불러오는 중...
+                  </span>
+                )}
               </div>
             )}
           </div>
