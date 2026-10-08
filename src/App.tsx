@@ -1072,6 +1072,23 @@ export default function App() {
     });
   };
 
+  const handleFocusAttendanceStaffGroup = (staffNames: string[]) => {
+    setHighlightedAttendanceStaffNames(new Set(staffNames));
+
+    const focusAttendanceCards = () => {
+      const attendanceCardsStart =
+        document.getElementById("attendance-staff-groups-section") ||
+        document.getElementById("attendance-status-section");
+      attendanceCardsStart?.scrollIntoView({
+        behavior: "auto",
+        block: "start",
+      });
+    };
+
+    focusAttendanceCards();
+    requestAnimationFrame(focusAttendanceCards);
+  };
+
   const handleFocusStaffRecord = (staffName: string) => {
     if (viewMode !== "list") {
       setViewMode("list");
@@ -3731,12 +3748,6 @@ export default function App() {
                                         }}
                                         className={cn(
                                           "px-1 py-1 sm:py-1.5 sm:px-2 rounded-xl border-2 flex flex-col items-center justify-center text-center relative transition-all active:scale-95 active:bg-stone-50 select-none overflow-hidden min-w-0",
-                                          highlightedStaffColumn === s.name &&
-                                            "ring-4 ring-red-500 shadow-[0_0_15px_rgba(239,68,68,0.6)] z-30 animate-pulse",
-                                          highlightedAttendanceStaffNames.has(
-                                            s.name,
-                                          ) &&
-                                            "ring-4 ring-cyan-400 ring-offset-2 shadow-[0_0_18px_rgba(34,211,238,0.7)] z-30 scale-[1.03] opacity-100",
                                           multiSelected.includes(s.name) &&
                                             "ring-2 ring-blue-500 border-blue-500 bg-blue-50/50 shadow-md transform scale-[1.02]",
                                           !multiSelected.includes(s.name) &&
@@ -3757,6 +3768,12 @@ export default function App() {
                                                       )
                                                     ? "border-stone-200 bg-white"
                                                     : "",
+                                          highlightedStaffColumn === s.name &&
+                                            "ring-4 ring-red-500 shadow-[0_0_15px_rgba(239,68,68,0.6)] z-30 animate-pulse",
+                                          highlightedAttendanceStaffNames.has(
+                                            s.name,
+                                          ) &&
+                                            "ring-4 ring-red-500 ring-offset-2 shadow-[0_0_18px_rgba(239,68,68,0.75)] z-30 scale-[1.03] opacity-100 animate-pulse",
                                         )}
                                       >
                                         {(() => {
@@ -3982,20 +3999,35 @@ export default function App() {
                       {/* Status Badges Group */}
                       <div className="flex items-center gap-1.5 flex-wrap">
                         {/* 대기 뱃지 */}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setStatusModal({ type: "WAITING", isOpen: true })
-                          }
+                        <div
                           className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 active:scale-95 transition-all cursor-pointer shadow-2xs"
-                          title="대기 명단 확인"
                         >
-                          <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-                          <span className="text-xs font-black">대기</span>
-                          <span className="bg-rose-600 text-white text-[11px] font-black px-1.5 py-0.2 rounded-md">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setStatusModal({ type: "WAITING", isOpen: true })
+                            }
+                            className="flex items-center gap-1.5"
+                            title="대기 명단 확인"
+                          >
+                            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                            <span className="text-xs font-black">대기</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleFocusAttendanceStaffGroup(
+                                progressStatusData.waitingStaffList.map(
+                                  (staffInfo) => staffInfo.name,
+                                ),
+                              )
+                            }
+                            className="bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-black px-1.5 py-0.2 rounded-md cursor-pointer active:scale-95 transition-all"
+                            title="대기 인원을 인원 현황에서 강조"
+                          >
                             {progressStatusData.waitingStaffList.length}명
-                          </span>
-                        </button>
+                          </button>
+                        </div>
 
                         {/* 초이스 뱃지 */}
                         <div
@@ -4004,9 +4036,20 @@ export default function App() {
                         >
                           <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
                           <span className="text-xs font-black">초이스</span>
-                          <span className="bg-purple-600 text-white text-[11px] font-black px-1.5 py-0.2 rounded-md">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleFocusAttendanceStaffGroup(
+                                progressStatusData.choiceStaffList.map(
+                                  (staffInfo) => staffInfo.name,
+                                ),
+                              )
+                            }
+                            className="bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-black px-1.5 py-0.2 rounded-md cursor-pointer active:scale-95 transition-all"
+                            title="초이스 인원을 인원 현황에서 강조"
+                          >
                             {progressStatusData.choiceStaffList.length}명
-                          </span>
+                          </button>
                         </div>
 
                         {/* 진행중 뱃지 */}
@@ -4076,9 +4119,18 @@ export default function App() {
                                       {estName}
                                     </span>
                                   </div>
-                                  <span className="bg-emerald-600 text-white font-black text-xs px-2 py-0.5 rounded-md shadow-2xs shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleFocusAttendanceStaffGroup(
+                                        info.staffList.map((staffInfo) => staffInfo.name),
+                                      )
+                                    }
+                                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs px-2 py-0.5 rounded-md shadow-2xs shrink-0 cursor-pointer active:scale-95 transition-all"
+                                    title={`${estName} 진행 인원을 인원 현황에서 강조`}
+                                  >
                                     {info.count}명
-                                  </span>
+                                  </button>
                                 </div>
 
                                 {/* Staff list chips */}
@@ -4143,9 +4195,18 @@ export default function App() {
                                       {estName}
                                     </span>
                                   </div>
-                                  <span className="bg-purple-600 text-white font-black text-xs px-2 py-0.5 rounded-md shadow-2xs shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleFocusAttendanceStaffGroup(
+                                        info.staffList.map((staffInfo) => staffInfo.name),
+                                      )
+                                    }
+                                    className="bg-purple-600 hover:bg-purple-700 text-white font-black text-xs px-2 py-0.5 rounded-md shadow-2xs shrink-0 cursor-pointer active:scale-95 transition-all"
+                                    title={`${estName} 초이스 인원을 인원 현황에서 강조`}
+                                  >
                                     초이스 {info.count}명
-                                  </span>
+                                  </button>
                                 </div>
                                 <div className="flex items-center gap-1 flex-wrap pt-0.5">
                                   {info.staffList.map((st) => {
@@ -4186,10 +4247,24 @@ export default function App() {
                     {/* 3. 대기 직원 현황 섹션 */}
                     <div className="pt-2.5 border-t border-stone-100">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-black text-stone-700 flex items-center gap-1.5">
+                        <div className="text-xs font-black text-stone-700 flex items-center gap-1.5">
                           <Clock className="w-3.5 h-3.5 text-rose-600" />
-                          대기 직원 현황 ({progressStatusData.waitingStaffList.length}명)
-                        </span>
+                          <span>대기 직원 현황</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleFocusAttendanceStaffGroup(
+                                progressStatusData.waitingStaffList.map(
+                                  (staffInfo) => staffInfo.name,
+                                ),
+                              )
+                            }
+                            className="bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-black px-1.5 py-0.5 rounded-md cursor-pointer active:scale-95 transition-all"
+                            title="대기 인원을 인원 현황에서 강조"
+                          >
+                            {progressStatusData.waitingStaffList.length}명
+                          </button>
+                        </div>
                       </div>
                       {progressStatusData.waitingStaffList.length === 0 ? (
                         <div className="text-stone-400 text-xs py-2 text-center bg-stone-50/70 rounded-xl border border-dashed border-stone-200">
