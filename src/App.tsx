@@ -3717,6 +3717,78 @@ export default function App() {
                                       startStr = format(ongoingStart, "HH:mm");
                                     }
 
+                                    const staffDayRecords = records.filter(
+                                      (record) =>
+                                        record.date === selectedDate &&
+                                        isSameStaffIdentity(
+                                          record.staffName,
+                                          s.name,
+                                        ),
+                                    );
+                                    const staffBounceCount = bouncedRecords.filter(
+                                      (record) =>
+                                        record.date === selectedDate &&
+                                        isSameStaffIdentity(
+                                          record.staffName,
+                                          s.name,
+                                        ),
+                                    ).length;
+                                    const staffDispatchCount =
+                                      staffDayRecords.length;
+                                    const staffAttemptCount =
+                                      staffDispatchCount + staffBounceCount;
+                                    const staffChoiceRate =
+                                      staffAttemptCount > 0
+                                        ? Math.round(
+                                            (staffDispatchCount /
+                                              staffAttemptCount) *
+                                              100,
+                                          )
+                                        : null;
+                                    const staffExtendedCount =
+                                      staffDayRecords.filter((record) => {
+                                        const start = record.startTime?.toDate
+                                          ? record.startTime.toDate()
+                                          : new Date(record.startTime);
+                                        const end = record.endTime?.toDate
+                                          ? record.endTime.toDate()
+                                          : new Date(record.endTime);
+                                        const isRecordOngoing =
+                                          start.getTime() === end.getTime();
+                                        const elapsedMinutes = Math.max(
+                                          0,
+                                          Math.floor(
+                                            ((isRecordOngoing
+                                              ? currentTime.getTime()
+                                              : end.getTime()) -
+                                              start.getTime()) /
+                                              60000,
+                                          ),
+                                        );
+                                        return (
+                                          (record.durationHours || 0) >= 1.5 ||
+                                          elapsedMinutes >= 90
+                                        );
+                                      }).length;
+                                    const staffExtensionRate =
+                                      staffDispatchCount > 0
+                                        ? Math.round(
+                                            (staffExtendedCount /
+                                              staffDispatchCount) *
+                                              100,
+                                          )
+                                        : null;
+                                    const staffTotalUnits =
+                                      staffDayRecords.reduce(
+                                        (sum, record) =>
+                                          sum + (record.durationHours || 0),
+                                        0,
+                                      );
+                                    const staffTotalUnitsText =
+                                      Number.isInteger(staffTotalUnits)
+                                        ? String(staffTotalUnits)
+                                        : staffTotalUnits.toFixed(1);
+
                                     return (
                                       <div
                                         id={`staff-card-${s.name}`}
@@ -3967,6 +4039,23 @@ export default function App() {
                                               )}
                                             </span>
                                           )}
+                                        </div>
+                                        <div
+                                          className="absolute bottom-1 left-1 z-10 flex flex-col items-start gap-0.5 pointer-events-none"
+                                          title={`당일 초이스율 ${staffChoiceRate ?? "-"}% · 연장율 ${staffExtensionRate ?? "-"}%`}
+                                        >
+                                          <span className="px-1 py-0.5 rounded bg-rose-100 border border-rose-200 text-[8px] sm:text-[9px] leading-none font-black text-rose-700 shadow-2xs whitespace-nowrap">
+                                            초 {staffChoiceRate !== null ? `${staffChoiceRate}%` : "-"}
+                                          </span>
+                                          <span className="px-1 py-0.5 rounded bg-indigo-100 border border-indigo-200 text-[8px] sm:text-[9px] leading-none font-black text-indigo-700 shadow-2xs whitespace-nowrap">
+                                            연 {staffExtensionRate !== null ? `${staffExtensionRate}%` : "-"}
+                                          </span>
+                                        </div>
+                                        <div
+                                          className="absolute bottom-1 right-1 z-10 px-1 py-0.5 rounded-md bg-stone-800 text-white text-[9px] sm:text-[10px] leading-none font-black shadow-2xs pointer-events-none whitespace-nowrap"
+                                          title={`당일 현재까지 총 ${staffTotalUnitsText}개`}
+                                        >
+                                          {staffTotalUnitsText}개
                                         </div>
                                       </div>
                                     );
