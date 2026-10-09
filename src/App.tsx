@@ -4105,17 +4105,17 @@ export default function App() {
                           현재 업소에서 진행 중인 파견이 없습니다.
                         </div>
                       ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                        <div className="flex flex-wrap gap-2">
                           {Object.entries(progressStatusData.ongoingByEstablishment).map(
                             ([estName, info]) => (
                               <div
                                 key={`ongoing-est-${estName}`}
-                                className="bg-emerald-50/90 border border-emerald-200 rounded-xl p-2.5 shadow-2xs hover:border-emerald-300 transition-all flex flex-col gap-1.5"
+                                className="w-full sm:w-auto sm:min-w-[210px] bg-emerald-50/90 border border-emerald-200 rounded-xl px-2.5 py-2 shadow-2xs hover:border-emerald-300 transition-all flex flex-col gap-1"
                               >
                                 <div className="flex items-center justify-between gap-2">
                                   <div className="flex items-center gap-1.5 min-w-0">
                                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                                    <span className="font-black text-xs sm:text-sm text-emerald-950 truncate">
+                                    <span className="font-black text-sm sm:text-[15px] text-emerald-950 truncate leading-tight">
                                       {estName}
                                     </span>
                                   </div>
@@ -4126,7 +4126,7 @@ export default function App() {
                                         info.staffList.map((staffInfo) => staffInfo.name),
                                       )
                                     }
-                                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs px-2 py-0.5 rounded-md shadow-2xs shrink-0 cursor-pointer active:scale-95 transition-all"
+                                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[13px] px-2 py-0.5 rounded-md shadow-2xs shrink-0 cursor-pointer active:scale-95 transition-all"
                                     title={`${estName} 진행 인원을 인원 현황에서 강조`}
                                   >
                                     {info.count}명
@@ -4134,7 +4134,7 @@ export default function App() {
                                 </div>
 
                                 {/* Staff list chips */}
-                                <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                                <div className="flex items-center gap-1 flex-wrap">
                                   {info.staffList.map((st) => {
                                     const p = formatStaffNameComponents(st.name);
                                     return (
@@ -4142,20 +4142,20 @@ export default function App() {
                                         key={st.name}
                                         type="button"
                                         onClick={() => handleFocusStaff(st.name)}
-                                        className="hover:underline font-bold bg-white/95 border border-emerald-200/90 text-emerald-950 px-1.5 py-0.5 rounded text-[10.5px] cursor-pointer active:scale-95 transition-all flex items-center gap-1 shadow-2xs"
+                                        className="hover:underline font-bold bg-white/95 border border-emerald-200/90 text-emerald-950 px-2 py-1 rounded-md text-xs sm:text-[13px] leading-none cursor-pointer active:scale-95 transition-all flex items-center gap-1 shadow-2xs"
                                         title={`${st.name} (${st.durationText ? `${st.durationText} 진행중` : "진행중"}) - 클릭 시 직원 위치로 이동`}
                                       >
                                         <span>{p.main4}</span>
                                         <span
                                           className={cn(
-                                            "px-1 py-0.2 rounded text-[7.5px] font-black text-white shrink-0 leading-none",
+                                            "px-1 py-0.5 rounded text-[9px] font-black text-white shrink-0 leading-none",
                                             p.isDirect ? "bg-amber-500" : "bg-purple-600"
                                           )}
                                         >
                                           {p.affiliation}
                                         </span>
                                         {st.durationText && (
-                                          <span className="text-[9px] text-emerald-700 font-normal">
+                                          <span className="text-[11px] text-emerald-700 font-bold">
                                             ({st.durationText})
                                           </span>
                                         )}
@@ -4181,17 +4181,17 @@ export default function App() {
                             {progressStatusData.choiceStaffList.length}명)
                           </span>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                        <div className="flex flex-wrap gap-2">
                           {Object.entries(progressStatusData.choiceByEstablishment).map(
                             ([estName, info]) => (
                               <div
                                 key={`choice-est-${estName}`}
-                                className="bg-purple-50/90 border border-purple-200 rounded-xl p-2.5 shadow-2xs hover:border-purple-300 transition-all flex flex-col gap-1.5"
+                                className="w-full sm:w-auto sm:min-w-[210px] bg-purple-50/90 border border-purple-200 rounded-xl px-2.5 py-2 shadow-2xs hover:border-purple-300 transition-all flex flex-col gap-1"
                               >
                                 <div className="flex items-center justify-between gap-2">
                                   <div className="flex items-center gap-1.5 min-w-0">
                                     <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse shrink-0" />
-                                    <span className="font-black text-xs sm:text-sm text-purple-950 truncate">
+                                    <span className="font-black text-sm sm:text-[15px] text-purple-950 truncate leading-tight">
                                       {estName}
                                     </span>
                                   </div>
@@ -4202,13 +4202,13 @@ export default function App() {
                                         info.staffList.map((staffInfo) => staffInfo.name),
                                       )
                                     }
-                                    className="bg-purple-600 hover:bg-purple-700 text-white font-black text-xs px-2 py-0.5 rounded-md shadow-2xs shrink-0 cursor-pointer active:scale-95 transition-all"
+                                    className="bg-purple-600 hover:bg-purple-700 text-white font-black text-[13px] px-2 py-0.5 rounded-md shadow-2xs shrink-0 cursor-pointer active:scale-95 transition-all"
                                     title={`${estName} 초이스 인원을 인원 현황에서 강조`}
                                   >
                                     초이스 {info.count}명
                                   </button>
                                 </div>
-                                <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                                <div className="flex items-center gap-1 flex-wrap">
                                   {info.staffList.map((st) => {
                                     const p = formatStaffNameComponents(st.name);
                                     return (
@@ -4216,20 +4216,20 @@ export default function App() {
                                         key={st.name}
                                         type="button"
                                         onClick={() => handleFocusStaff(st.name)}
-                                        className="hover:underline font-bold bg-white/95 border border-purple-200/90 text-purple-950 px-1.5 py-0.5 rounded text-[10.5px] cursor-pointer active:scale-95 transition-all flex items-center gap-1 shadow-2xs"
+                                        className="hover:underline font-bold bg-white/95 border border-purple-200/90 text-purple-950 px-2 py-1 rounded-md text-xs sm:text-[13px] leading-none cursor-pointer active:scale-95 transition-all flex items-center gap-1 shadow-2xs"
                                         title={`${st.name} (${st.choiceTime ? `${st.choiceTime} 초이스` : "초이스중"}) - 클릭 시 직원 위치로 이동`}
                                       >
                                         <span>{p.main4}</span>
                                         <span
                                           className={cn(
-                                            "px-1 py-0.2 rounded text-[7.5px] font-black text-white shrink-0 leading-none",
+                                            "px-1 py-0.5 rounded text-[9px] font-black text-white shrink-0 leading-none",
                                             p.isDirect ? "bg-amber-500" : "bg-purple-600"
                                           )}
                                         >
                                           {p.affiliation}
                                         </span>
                                         {st.choiceTime && (
-                                          <span className="text-[9px] text-purple-700 font-normal">
+                                          <span className="text-[11px] text-purple-700 font-bold">
                                             ({st.choiceTime})
                                           </span>
                                         )}
