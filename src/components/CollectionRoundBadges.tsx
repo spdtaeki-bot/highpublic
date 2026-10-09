@@ -31,7 +31,7 @@ interface Draft {
   amount: string;
   paymentMethod: PaymentMethod;
   depositorName: string;
-  /** yyyy-MM-ddTHH:mm (datetime-local) */
+  /** yyyyMMdd HH:mm (24시간제 수동 입력) */
   datetime: string;
   deleted: boolean;
 }
@@ -48,14 +48,61 @@ const toDate = (v: any): Date | null => {
 
 const toLocalInput = (v: any): string => {
   const d = toDate(v);
-  return d ? format(d, "yyyy-MM-dd'T'HH:mm") : "";
+  return d ? format(d, "yyyyMMdd HH:mm") : "";
 };
 
 const sameMinute = (a: any, b: string): boolean => {
   const d = toDate(a);
   if (!d && !b) return true;
   if (!d || !b) return false;
-  return format(d, "yyyy-MM-dd'T'HH:mm") === b;
+  return format(d, "yyyyMMdd HH:mm") === b;
+};
+
+const formatManualDateTimeInput = (value: string): string => {
+  const digits = value.replace(/\D/g, "").slice(0, 12);
+  if (digits.length <= 8) return digits;
+  if (digits.length <= 10) {
+    return `${digits.slice(0, 8)} ${digits.slice(8)}`;
+  }
+  return `${digits.slice(0, 8)} ${digits.slice(8, 10)}:${digits.slice(10)}`;
+};
+
+const parseManualDateTime = (value: string): Date | null => {
+  const match = value.match(
+    /^(\d{4})(\d{2})(\d{2})\s(\d{2}):(\d{2})$/,
+  );
+  if (!match) return null;
+
+  const [, yearText, monthText, dayText, hourText, minuteText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+
+  const result = new Date(year, month - 1, day, hour, minute, 0, 0);
+  if (
+    result.getFullYear() !== year ||
+    result.getMonth() !== month - 1 ||
+    result.getDate() !== day ||
+    result.getHours() !== hour ||
+    result.getMinutes() !== minute
+  ) {
+    return null;
+  }
+  return result;
 };
 
 const methodLabel = (m?: PaymentMethod) =>
@@ -68,6 +115,16 @@ const sourceTitle = (s: CollectionRoundSource) =>
 
 const badgeKey = (rd: RoundBreakdownItem, idx: number) =>
   `${rd.isOnSite ? "onsite" : rd.round}-${idx}-${rd.sources.map((s) => s.key).join("|")}`;
+
+const selectWholeInput = (input: HTMLInputElement) => {
+  requestAnimationFrame(() => {
+    try {
+      input.select();
+    } catch {
+      // 일부 브라우저의 날짜 입력은 전체 선택 API를 지원하지 않는다.
+    }
+  });
+};
 
 export function CollectionRoundBadges({
   rounds,
@@ -174,9 +231,11 @@ export function CollectionRoundBadges({
           onAlert(`[${sourceTitle(s)}] 수금 일시를 입력해 주세요.`);
           return;
         }
-        const dt = new Date(d.datetime);
-        if (isNaN(dt.getTime())) {
-          onAlert(`[${sourceTitle(s)}] 수금 일시 형식이 올바르지 않습니다.`);
+        const dt = parseManualDateTime(d.datetime);
+        if (!dt) {
+          onAlert(
+            `[${sourceTitle(s)}] 수금 일시를 YYYYMMDD HH:mm 형식의 24시간제로 입력해 주세요.\n예: 20261007 23:15`,
+          );
           return;
         }
         patch.collectedAt = Timestamp.fromDate(dt);
@@ -402,6 +461,8 @@ export function CollectionRoundBadges({
                                 min={1}
                                 step={1000}
                                 value={d.amount}
+                                onFocus={(e) => selectWholeInput(e.currentTarget)}
+                                onClick={(e) => selectWholeInput(e.currentTarget)}
                                 onChange={(e) =>
                                   setDrafts((p) => ({
                                     ...p,
@@ -436,6 +497,8 @@ export function CollectionRoundBadges({
                                 type="text"
                                 value={d.depositorName}
                                 placeholder="없음"
+                                onFocus={(e) => selectWholeInput(e.currentTarget)}
+                                onClick={(e) => selectWholeInput(e.currentTarget)}
                                 onChange={(e) =>
                                   setDrafts((p) => ({
                                     ...p,
@@ -448,12 +511,23 @@ export function CollectionRoundBadges({
                             <label className="flex flex-col gap-1 min-w-0">
                               <span className="text-[10px] font-black text-stone-500">수금 일시</span>
                               <input
-                                type="datetime-local"
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete="off"
+                                maxLength={14}
                                 value={d.datetime}
+                                placeholder="YYYYMMDD HH:mm"
+                                onFocus={(e) => selectWholeInput(e.currentTarget)}
+                                onClick={(e) => selectWholeInput(e.currentTarget)}
                                 onChange={(e) =>
                                   setDrafts((p) => ({
                                     ...p,
-                                    [s.key]: { ...p[s.key], datetime: e.target.value },
+                                    [s.key]: {
+                                      ...p[s.key],
+                                      datetime: formatManualDateTimeInput(
+                                        e.target.value,
+                                      ),
+                                    },
                                   }))
                                 }
                                 className="w-full min-w-0 px-2 py-1.5 rounded-md border border-stone-300 bg-white text-xs font-black text-stone-900 focus:outline-none focus:ring-2 focus:ring-stone-400"
