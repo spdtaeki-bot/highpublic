@@ -308,6 +308,9 @@ export function UnpaidDetailView({
     dateKey: string;
     estName: string;
   } | null>(null);
+  const [establishmentHistoryModal, setEstablishmentHistoryModal] = useState<{
+    estName: string;
+  } | null>(null);
 
   // Screenshot Capture State
   const [isCapturing, setIsCapturing] = useState<string | null>(null);
@@ -540,6 +543,36 @@ export function UnpaidDetailView({
         batchAdditionalCollecting.estName
       ]
     : null;
+
+  const activeEstablishmentHistory = useMemo(() => {
+    if (!establishmentHistoryModal) return [];
+    return Object.keys(dateEstablishmentGroups)
+      .sort((a, b) => b.localeCompare(a))
+      .map((date) => {
+        const establishment =
+          dateEstablishmentGroups[date]?.[
+            establishmentHistoryModal.estName
+          ];
+        return establishment ? { date, establishment } : null;
+      })
+      .filter(
+        (
+          item,
+        ): item is {
+          date: string;
+          establishment: {
+            totalRequested: number;
+            totalCollected: number;
+            unpaidAmount: number;
+            records: DispatchRecord[];
+            hasShortage: boolean;
+            isFullyPaid: boolean;
+            roundBreakdown: RoundBreakdownItem[];
+            isBatchCollection: boolean;
+          };
+        } => Boolean(item),
+      );
+  }, [dateEstablishmentGroups, establishmentHistoryModal]);
 
   // Overall Totals
   const overallStats = useMemo(() => {
@@ -1581,6 +1614,21 @@ export function UnpaidDetailView({
                                 <span className="font-black text-stone-900 text-base sm:text-lg whitespace-nowrap">
                                   {est.estName}
                                 </span>
+                                <button
+                                  type="button"
+                                  data-html2canvas-ignore="true"
+                                  data-capture-ignore="true"
+                                  onClick={() =>
+                                    setEstablishmentHistoryModal({
+                                      estName: est.estName,
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-black shadow-xs active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                                  title={`${est.estName}의 모든 기록 보기`}
+                                >
+                                  <Clock className="w-3 h-3 shrink-0" />
+                                  기록
+                                </button>
                                 <span className="text-xs font-black text-stone-400 shrink-0">
                                   ({est.records.length}건)
                                 </span>
@@ -2119,6 +2167,299 @@ export function UnpaidDetailView({
 
       {/* Internal Modals */}
       <AnimatePresence>
+        {establishmentHistoryModal && (
+          <div
+            className="fixed inset-0 z-[90] flex items-center justify-center p-3 sm:p-4"
+            data-html2canvas-ignore="true"
+            data-capture-ignore="true"
+          >
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setEstablishmentHistoryModal(null)}
+              className="absolute inset-0 bg-stone-900/60 backdrop-blur-xs"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 12 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative z-10 flex max-h-[calc(100dvh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+            >
+              <div className="flex items-center justify-between gap-3 border-b border-stone-200 bg-stone-50 px-4 py-3.5 sm:px-5">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Building2 className="h-5 w-5 shrink-0 text-indigo-600" />
+                    <h3 className="truncate text-lg font-black text-stone-900">
+                      {establishmentHistoryModal.estName} 전체 기록
+                    </h3>
+                  </div>
+                  <p className="mt-1 text-xs font-bold text-stone-500">
+                    전체 {activeEstablishmentHistory.length}일 ·{" "}
+                    {activeEstablishmentHistory.reduce(
+                      (sum, item) =>
+                        sum + item.establishment.records.length,
+                      0,
+                    )}
+                    건
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEstablishmentHistoryModal(null)}
+                  className="shrink-0 rounded-xl bg-white p-2 text-stone-500 shadow-xs border border-stone-200 transition-colors hover:bg-stone-100 cursor-pointer"
+                  aria-label="전체 기록 창 닫기"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-3 sm:p-4">
+                {activeEstablishmentHistory.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-4 py-10 text-center text-sm font-bold text-stone-400">
+                    해당 업소의 기록이 없습니다.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {activeEstablishmentHistory.map(
+                      ({ date: historyDate, establishment }) => {
+                        const hasAnyCollection =
+                          establishment.records.some(
+                            (record) =>
+                              record.paymentMethod !== "UNPAID" ||
+                              (record.collectedAmount !== undefined &&
+                                record.collectedAmount > 0),
+                          ) || establishment.totalCollected > 0;
+                        const isPaid =
+                          establishment.unpaidAmount === 0 &&
+                          establishment.totalRequested > 0;
+                        const isUnder =
+                          hasAnyCollection &&
+                          establishment.totalCollected <
+                            establishment.totalRequested;
+                        const isOver =
+                          establishment.totalCollected >
+                          establishment.totalRequested;
+                        return (
+                          <div
+                            key={`history-${historyDate}`}
+                            className={cn(
+                              "overflow-hidden rounded-2xl border-2 bg-white",
+                              isOver
+                                ? "border-amber-300"
+                                : isPaid
+                                  ? "border-emerald-300"
+                                  : "border-red-300",
+                            )}
+                          >
+                            <div
+                              className={cn(
+                                "flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2.5",
+                                isOver
+                                  ? "border-amber-200 bg-amber-50"
+                                  : isPaid
+                                    ? "border-emerald-200 bg-emerald-50"
+                                    : "border-red-200 bg-red-50",
+                              )}
+                            >
+                              <span className="inline-flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-2 py-1 text-xs font-black text-stone-900">
+                                <Calendar className="h-3.5 w-3.5 text-stone-500" />
+                                {format(parseISO(historyDate), "yyyy-MM-dd (eee)", {
+                                  locale: ko,
+                                })}
+                              </span>
+                              <span
+                                className={cn(
+                                  "rounded-lg px-2 py-1 text-xs font-black text-white",
+                                  isOver
+                                    ? "bg-amber-600"
+                                    : isPaid
+                                      ? "bg-emerald-600"
+                                      : "bg-red-600",
+                                )}
+                              >
+                                {isOver
+                                  ? `초과수금 +${(
+                                      establishment.totalCollected -
+                                      establishment.totalRequested
+                                    ).toLocaleString()}원`
+                                  : isPaid
+                                    ? "수금완료"
+                                    : isUnder
+                                      ? `부분미수 -${establishment.unpaidAmount.toLocaleString()}원`
+                                      : `미수 ${establishment.unpaidAmount.toLocaleString()}원`}
+                              </span>
+                            </div>
+
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-stone-100 px-3 py-2 text-[11px] font-bold text-stone-500">
+                              <span>
+                                총 청구{" "}
+                                <strong className="text-stone-900">
+                                  {establishment.totalRequested.toLocaleString()}원
+                                </strong>
+                              </span>
+                              <span>
+                                총 수금{" "}
+                                <strong className="text-emerald-700">
+                                  {establishment.totalCollected.toLocaleString()}원
+                                </strong>
+                              </span>
+                              <span>
+                                {establishment.records.length}건
+                              </span>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-1.5 border-b border-stone-100 bg-stone-50/60 px-3 py-2">
+                              {establishment.records.some(
+                                (record) =>
+                                  record.paymentMethod === "UNPAID",
+                              ) && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setBatchCollecting({
+                                        dateKey: historyDate,
+                                        estName:
+                                          establishmentHistoryModal.estName,
+                                        method: "CASH",
+                                      })
+                                    }
+                                    className="rounded-lg bg-emerald-600 px-2 py-1 text-[11px] font-black text-white transition-all hover:bg-emerald-700 active:scale-95 cursor-pointer"
+                                  >
+                                    현금전체
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setBatchCollecting({
+                                        dateKey: historyDate,
+                                        estName:
+                                          establishmentHistoryModal.estName,
+                                        method: "TRANSFER",
+                                      })
+                                    }
+                                    className="rounded-lg bg-blue-600 px-2 py-1 text-[11px] font-black text-white transition-all hover:bg-blue-700 active:scale-95 cursor-pointer"
+                                  >
+                                    계좌전체
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setBatchAdditionalCollecting({
+                                    dateKey: historyDate,
+                                    estName:
+                                      establishmentHistoryModal.estName,
+                                  })
+                                }
+                                className="rounded-lg bg-amber-500 px-2 py-1 text-[11px] font-black text-white transition-all hover:bg-amber-600 active:scale-95 cursor-pointer"
+                              >
+                                추가수금/조정
+                              </button>
+                              {establishment.totalCollected > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleEstablishmentAllCancel(
+                                      establishmentHistoryModal.estName,
+                                      establishment.records,
+                                    )
+                                  }
+                                  className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-[11px] font-black text-stone-600 transition-all hover:border-red-300 hover:bg-red-50 hover:text-red-700 active:scale-95 cursor-pointer"
+                                >
+                                  전체 취소
+                                </button>
+                              )}
+                            </div>
+
+                            {establishment.roundBreakdown.length > 0 && (
+                              <div className="border-b border-stone-100 px-3 py-2">
+                                <CollectionRoundBadges
+                                  rounds={establishment.roundBreakdown}
+                                  records={establishment.records}
+                                  size="sm"
+                                  onApply={async (updates) => {
+                                    await Promise.all(
+                                      updates.map(({ id, updates: recordUpdates }) =>
+                                        applyRecordUpdate(id, recordUpdates),
+                                      ),
+                                    );
+                                  }}
+                                  onConfirm={(message, action) =>
+                                    setConfirmConfig({ message, action })
+                                  }
+                                  onAlert={(message) =>
+                                    setAlertConfig({ message })
+                                  }
+                                />
+                              </div>
+                            )}
+
+                            <div className="divide-y divide-stone-100 px-3">
+                              {establishment.records.map((record) => (
+                                <div
+                                  key={
+                                    record.id ||
+                                    `${historyDate}-${record.staffName}-${record.startTime}`
+                                  }
+                                  className="flex items-center justify-between gap-3 py-2"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="truncate text-xs font-black text-stone-900">
+                                      {record.staffName}
+                                    </p>
+                                    <p className="mt-0.5 text-[10px] font-bold text-stone-400">
+                                      {record.durationHours || 0}개
+                                    </p>
+                                  </div>
+                                  <div className="flex shrink-0 items-center gap-1.5">
+                                    <span className="text-xs font-black text-stone-800">
+                                      {(record.totalAmount || 0).toLocaleString()}원
+                                    </span>
+                                    {onViewDispatchRecord && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEstablishmentHistoryModal(null);
+                                          onViewDispatchRecord(record);
+                                        }}
+                                        className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-2 py-1 text-[10px] font-black text-white transition-all hover:bg-blue-700 active:scale-95 cursor-pointer"
+                                        title={`${historyDate} 파견기록에서 바로 확인`}
+                                      >
+                                        <CheckCircle2 className="h-3 w-3" />
+                                        체크
+                                      </button>
+                                    )}
+                                    {onEditRecord && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEstablishmentHistoryModal(null);
+                                          onEditRecord(record);
+                                        }}
+                                        className="rounded-lg bg-stone-100 px-2 py-1 text-[10px] font-black text-stone-600 transition-all hover:bg-stone-200 active:scale-95 cursor-pointer"
+                                      >
+                                        수정
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      },
+                    )}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {batchCollecting && activeBatchCollection && (
           <div
             className="fixed inset-0 z-[90] flex items-center justify-center p-3 sm:p-4"
