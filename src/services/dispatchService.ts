@@ -17,7 +17,8 @@ import {
   arrayRemove,
   deleteField,
   FieldValue,
-  runTransaction
+  runTransaction,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { DispatchRecord, BouncedRecord, SYSTEM_RATES, COMMISSION_RATE, SystemType, StaffType, ActiveChoice } from '../types';
@@ -135,26 +136,11 @@ export const addStaff = async (
   name: string,
   type: StaffType = 'COFFEE',
   employmentType?: "DIRECT" | "DELEGATED",
-  office?: string
 ) => {
   try {
     const trimmed = (name || '').trim();
     const cleanNoSpace = trimmed.replace(/\s+/g, '');
-    let autoEmpType: "DIRECT" | "DELEGATED" = cleanNoSpace.length <= 4 ? "DIRECT" : "DELEGATED";
-    let autoOffice = "";
-    if (autoEmpType === "DIRECT") {
-      autoOffice = "직속";
-    } else {
-      const parts = trimmed.split(/\s+/).filter(Boolean);
-      if (parts.length >= 3) {
-        autoOffice = parts.slice(2).join(" ").trim();
-      } else if (parts.length === 2 && parts[1].length > 2) {
-        autoOffice = parts[1].slice(2).trim();
-      } else {
-        autoOffice = cleanNoSpace.slice(4).trim();
-      }
-      autoOffice = autoOffice.replace(/^[\(\[\{]+|[\)\]\}]+$/g, "").trim() || "위탁";
-    }
+    const autoEmpType: "DIRECT" | "DELEGATED" = cleanNoSpace.length <= 4 ? "DIRECT" : "DELEGATED";
 
     await addDoc(collection(db, STAFF_COLLECTION), {
       name: trimmed,
@@ -163,12 +149,72 @@ export const addStaff = async (
       createdAt: Timestamp.now(),
       type,
       employmentType: employmentType || autoEmpType,
-      office: office || autoOffice
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, STAFF_COLLECTION);
   }
 };
+
+/**
+ * 과거에 직원 문서에 따로 저장되던 `office`(소속 사무실) 필드가 아직 있는지.
+ * 소속은 이름 접미 자동 판별만 쓰므로, 이 필드가 있으면 값과 관계없이 삭제 대상이다.
+ */
+export function staffRecordHasStoredOffice(record: object): boolean {
+  return Object.prototype.hasOwnProperty.call(record, "office");
+}
+
+let officeCleanupInFlight = false;
+const officeCleanupDoneIds = new Set<string>();
+
+/**
+ * 직원 문서의 `office` 필드만 삭제한다. 다른 필드는 건드리지 않는다.
+ * 필드가 없는 문서와 이번 실행에서 이미 지운 문서는 건너뛰므로 반복 호출해도 추가 쓰기가 없다.
+ */
+export async function clearObsoleteStaffOfficeFields(
+  staffList: Array<{ id?: string }>,
+): Promise<void> {
+  if (officeCleanupInFlight) return;
+  const targets = staffList.filter(
+    (staff) =>
+      typeof staff.id === "string" &&
+      staff.id.length > 0 &&
+      !officeCleanupDoneIds.has(staff.id) &&
+      staffRecordHasStoredOffice(staff),
+  );
+  if (targets.length === 0) return;
+
+  officeCleanupInFlight = true;
+  try {
+    const CHUNK = 400;
+    for (let i = 0; i < targets.length; i += CHUNK) {
+      const chunk = targets.slice(i, i + CHUNK);
+      let committed = false;
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const batch = writeBatch(db);
+          for (const staff of chunk) {
+            batch.update(doc(db, STAFF_COLLECTION, staff.id!), {
+              office: deleteField(),
+            });
+          }
+          await batch.commit();
+          committed = true;
+          break;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (committed) {
+        for (const staff of chunk) officeCleanupDoneIds.add(staff.id!);
+      } else if (lastError) {
+        console.error("소속 사무실(office) 필드 정리 실패", lastError);
+      }
+    }
+  } finally {
+    officeCleanupInFlight = false;
+  }
+}
 
 export const updateStaff = async (id: string, data: Partial<any>) => {
   try {
@@ -189,8 +235,14 @@ export const updateStaff = async (id: string, data: Partial<any>) => {
       }
     }
     
-    // Prepare update payload
+    // Prepare update payload. 소속 사무실(office)은 더 이상 저장하지 않는다.
     const updatePayload = { ...data };
+    if (
+      Object.prototype.hasOwnProperty.call(updatePayload, "office") &&
+      !(updatePayload.office instanceof FieldValue)
+    ) {
+      updatePayload.office = deleteField();
+    }
     if (nameChanged && oldName) {
       const updatedPreviousNames = Array.from(new Set([
         ...existingPreviousNames,
@@ -280,7 +332,9 @@ export const subscribeToStaff = (callback: (staff: any[]) => void, onError?: (er
     orderBy('name', 'asc')
   );
   return onSnapshot(q, (snapshot) => {
-    callback(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    const staff = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
+    callback(staff);
+    void clearObsoleteStaffOfficeFields(staff);
   }, (error) => {
     if (onError) onError(error);
     const errInfo = getErrorInfo(error, OperationType.LIST, STAFF_COLLECTION);
