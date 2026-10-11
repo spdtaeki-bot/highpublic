@@ -79,7 +79,6 @@ export interface Staff {
   createdAt: any;
   type: StaffType;
   employmentType?: "DIRECT" | "DELEGATED";
-  office?: string;
   isBanti?: boolean;
   isNoBanti?: boolean;
   defaultTip?: number;

@@ -5022,10 +5022,8 @@ function StatusStaffModal({
 
     if (searchTerm.trim()) {
       const term = searchTerm.trim().toLowerCase();
-      return (
-        s.name.toLowerCase().includes(term) ||
-        (s.office && s.office.toLowerCase().includes(term))
-      );
+      const affiliation = formatStaffNameComponents(s.name).affiliation.toLowerCase();
+      return s.name.toLowerCase().includes(term) || affiliation.includes(term);
     }
 
     return true;
@@ -5708,7 +5706,6 @@ function StaffEditModal({
 
     const parsedInfo = formatStaffNameComponents(name.trim());
     const autoEmpType = parsedInfo.isDirect ? "DIRECT" : "DELEGATED";
-    const autoOffice = parsedInfo.affiliation;
 
     setIsSaving(true);
     try {
@@ -5716,7 +5713,7 @@ function StaffEditModal({
         name: name.trim(),
         type,
         employmentType: autoEmpType,
-        office: autoOffice,
+        office: deleteField(),
         accountNumber: accountNumber.trim(),
       });
       onClose();
@@ -6454,7 +6451,7 @@ function ManagementModal({
                           소속 사무실:
                         </span>
                         <span className="text-[10px] font-black text-stone-800 truncate">
-                          {s.office || "-"}
+                          {formatStaffNameComponents(s.name).affiliation || "-"}
                         </span>
                       </div>
                     </div>
