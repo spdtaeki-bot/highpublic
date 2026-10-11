@@ -13,6 +13,7 @@ import {
   ChevronUp,
   AlertCircle,
   Camera,
+  StickyNote,
   X,
 } from "lucide-react";
 import * as htmlToImage from "html-to-image";
@@ -311,6 +312,15 @@ export function UnpaidDetailView({
   const [establishmentHistoryModal, setEstablishmentHistoryModal] = useState<{
     estName: string;
   } | null>(null);
+  const [establishmentMemoModal, setEstablishmentMemoModal] = useState<{
+    estName: string;
+    dateKey: string;
+    recordIds: string[];
+    memo: string;
+    originalMemo: string;
+  } | null>(null);
+  const [isSavingEstablishmentMemo, setIsSavingEstablishmentMemo] =
+    useState(false);
 
   // Screenshot Capture State
   const [isCapturing, setIsCapturing] = useState<string | null>(null);
@@ -797,6 +807,36 @@ export function UnpaidDetailView({
     updates: Partial<DispatchRecord>,
   ) => {
     await onUpdateRecord(id, updates);
+  };
+
+  const handleSaveEstablishmentMemo = async () => {
+    if (!establishmentMemoModal) return;
+    if (establishmentMemoModal.recordIds.length === 0) {
+      setAlertConfig({ message: "메모를 저장할 기록을 찾지 못했습니다." });
+      return;
+    }
+
+    setIsSavingEstablishmentMemo(true);
+    try {
+      const memo = establishmentMemoModal.memo.trim();
+      const updatedAt = Timestamp.now();
+      await Promise.all(
+        establishmentMemoModal.recordIds.map((id) =>
+          applyRecordUpdate(id, {
+            unpaidMemo: memo,
+            unpaidMemoUpdatedAt: updatedAt,
+          }),
+        ),
+      );
+      setEstablishmentMemoModal(null);
+    } catch (error) {
+      console.error("Failed to save establishment memo", error);
+      setAlertConfig({
+        message: "메모 저장 중 오류가 발생했습니다. 다시 시도해주세요.",
+      });
+    } finally {
+      setIsSavingEstablishmentMemo(false);
+    }
   };
 
   // Batch Collect Action (Establishment level)
@@ -1568,6 +1608,10 @@ export function UnpaidDetailView({
                       const diff = Math.abs(
                         estTotalRequested - estTotalCollected,
                       );
+                      const establishmentMemo =
+                        est.records
+                          .map((record) => record.unpaidMemo?.trim())
+                          .find(Boolean) || "";
 
                       // Calculate breakdown of rounds (1차 수금, 2차 수금, etc.)
                       const estRoundBreakdown = est.roundBreakdown;
@@ -1628,6 +1672,41 @@ export function UnpaidDetailView({
                                 >
                                   <Clock className="w-3 h-3 shrink-0" />
                                   기록
+                                </button>
+                                <button
+                                  type="button"
+                                  data-html2canvas-ignore="true"
+                                  data-capture-ignore="true"
+                                  onClick={() =>
+                                    setEstablishmentMemoModal({
+                                      estName: est.estName,
+                                      dateKey: date,
+                                      recordIds: est.records
+                                        .map((record) => record.id)
+                                        .filter(
+                                          (id): id is string => Boolean(id),
+                                        ),
+                                      memo: establishmentMemo,
+                                      originalMemo: establishmentMemo,
+                                    })
+                                  }
+                                  className={cn(
+                                    "inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-black shadow-xs active:scale-95 transition-all cursor-pointer whitespace-nowrap border",
+                                    establishmentMemo
+                                      ? "bg-amber-500 hover:bg-amber-600 border-amber-600 text-white"
+                                      : "bg-white hover:bg-amber-50 border-amber-300 text-amber-700",
+                                  )}
+                                  title={
+                                    establishmentMemo
+                                      ? `${est.estName} 메모 읽기·수정`
+                                      : `${est.estName} 메모 작성`
+                                  }
+                                >
+                                  <StickyNote className="w-3 h-3 shrink-0" />
+                                  메모
+                                  {establishmentMemo && (
+                                    <span className="h-1.5 w-1.5 rounded-full bg-white" />
+                                  )}
                                 </button>
                                 <span className="text-xs font-black text-stone-400 shrink-0">
                                   ({est.records.length}건)
@@ -2167,6 +2246,115 @@ export function UnpaidDetailView({
 
       {/* Internal Modals */}
       <AnimatePresence>
+        {establishmentMemoModal && (
+          <div
+            className="fixed inset-0 z-[95] flex items-center justify-center p-3 sm:p-4"
+            data-html2canvas-ignore="true"
+            data-capture-ignore="true"
+          >
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                if (!isSavingEstablishmentMemo) {
+                  setEstablishmentMemoModal(null);
+                }
+              }}
+              className="absolute inset-0 bg-stone-900/60 backdrop-blur-xs"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 12 }}
+              onClick={(event) => event.stopPropagation()}
+              className="relative z-10 w-full max-w-lg overflow-hidden rounded-3xl bg-white shadow-2xl"
+            >
+              <div className="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-3.5 sm:px-5">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <StickyNote className="h-5 w-5 shrink-0 text-amber-600" />
+                    <h3 className="truncate text-lg font-black text-stone-900">
+                      {establishmentMemoModal.estName} 메모
+                    </h3>
+                  </div>
+                  <p className="mt-1 text-xs font-bold text-stone-500">
+                    {establishmentMemoModal.dateKey} 미수금 관련 통화·확인 내용
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEstablishmentMemoModal(null)}
+                  disabled={isSavingEstablishmentMemo}
+                  className="shrink-0 rounded-xl border border-stone-200 bg-white p-2 text-stone-500 shadow-xs transition-colors hover:bg-stone-100 disabled:opacity-50 cursor-pointer"
+                  aria-label="메모 창 닫기"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="p-4 sm:p-5">
+                <textarea
+                  autoFocus
+                  value={establishmentMemoModal.memo}
+                  onChange={(event) =>
+                    setEstablishmentMemoModal((current) =>
+                      current
+                        ? { ...current, memo: event.target.value }
+                        : current,
+                    )
+                  }
+                  maxLength={3000}
+                  rows={9}
+                  placeholder="통화 내용, 입금 예정일, 금액이 맞지 않는 이유 등 기억해야 할 내용을 입력하세요."
+                  className="w-full resize-y rounded-2xl border-2 border-amber-400 bg-amber-50/30 px-3.5 py-3 text-sm font-bold leading-6 text-stone-800 outline-none transition-all placeholder:font-medium placeholder:text-stone-400 focus:border-amber-600 focus:bg-white focus:ring-4 focus:ring-amber-100"
+                />
+                <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] font-bold text-stone-400">
+                  <span>빈 내용으로 저장하면 기존 메모가 삭제됩니다.</span>
+                  <span>{establishmentMemoModal.memo.length}/3000</span>
+                </div>
+
+                <div className="mt-4 flex items-center justify-end gap-2">
+                  {establishmentMemoModal.originalMemo && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEstablishmentMemoModal((current) =>
+                          current ? { ...current, memo: "" } : current,
+                        )
+                      }
+                      disabled={isSavingEstablishmentMemo}
+                      className="mr-auto rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-600 transition-colors hover:bg-red-100 disabled:opacity-50 cursor-pointer"
+                    >
+                      내용 지우기
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setEstablishmentMemoModal(null)}
+                    disabled={isSavingEstablishmentMemo}
+                    className="rounded-xl bg-stone-100 px-4 py-2 text-xs font-black text-stone-600 transition-colors hover:bg-stone-200 disabled:opacity-50 cursor-pointer"
+                  >
+                    닫기
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveEstablishmentMemo}
+                    disabled={
+                      isSavingEstablishmentMemo ||
+                      establishmentMemoModal.memo.trim() ===
+                        establishmentMemoModal.originalMemo
+                    }
+                    className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-black text-white shadow-sm transition-all hover:bg-amber-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                  >
+                    {isSavingEstablishmentMemo ? "저장 중..." : "메모 저장"}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {establishmentHistoryModal && (
           <div
             className="fixed inset-0 z-[90] flex items-center justify-center p-3 sm:p-4"

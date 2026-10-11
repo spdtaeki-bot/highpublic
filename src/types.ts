@@ -65,6 +65,8 @@ export interface DispatchRecord {
   collectedAmount?: number;
   isBounced?: boolean;
   bounceCount?: number;
+  unpaidMemo?: string;
+  unpaidMemoUpdatedAt?: any; // Firestore Timestamp
   createdAt: any; // Firestore Timestamp
   uid: string;
 }
