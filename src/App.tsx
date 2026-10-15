@@ -112,6 +112,14 @@ import {
 const SettlementView = lazy(() => import("./components/SettlementView").then(m => ({ default: m.SettlementView })));
 const UnpaidDetailView = lazy(() => import("./components/UnpaidDetailView").then(m => ({ default: m.UnpaidDetailView })));
 const StatsView = lazy(() => import("./components/StatsView").then(m => ({ default: m.StatsView })));
+import {
+  clearAllSiteData,
+  isBrowserStorageQuotaError,
+  persistAllOffCaptures,
+  pruneAllOffCaptureMap,
+  readAllOffCaptures,
+  safeSetItem,
+} from "./lib/siteStorage";
 import { CollectionRoundBadges } from "./components/CollectionRoundBadges";
 import { ChoiceSetupModal } from "./components/ChoiceSetupModal";
 import { ChoiceActionModal } from "./components/ChoiceActionModal";
@@ -361,16 +369,7 @@ export class ErrorBoundary extends React.Component<
             </button>
             <button
               onClick={async () => {
-                localStorage.clear();
-                if ("serviceWorker" in navigator) {
-                  try {
-                    const registrations =
-                      await navigator.serviceWorker.getRegistrations();
-                    await Promise.all(registrations.map((r) => r.unregister()));
-                  } catch (e) {
-                    console.error(e);
-                  }
-                }
+                await clearAllSiteData();
                 window.location.reload();
               }}
               className="w-full py-3 bg-white text-stone-500 border border-stone-200 rounded-xl font-bold text-sm"
@@ -760,16 +759,11 @@ export default function App() {
   const [capturingGroupText, setCapturingGroupText] = useState<string | null>(null);
   const [completedAllOffCaptures, setCompletedAllOffCaptures] = useState<
     Record<string, true>
-  >(() => {
-    try {
-      return JSON.parse(
-        localStorage.getItem("office_all_off_group_captures") || "{}",
-      );
-    } catch {
-      return {};
-    }
-  });
+  >(() => readAllOffCaptures());
   const [initError, setInitError] = useState<string | null>(null);
+  const [initErrorKind, setInitErrorKind] = useState<
+    "firestore-quota" | "storage-quota" | "generic" | null
+  >(null);
   const dateInputRef = useRef<HTMLInputElement>(null);
 
   const getAllOffCaptureKey = (groupTitle: string, staffNames: string[]) => {
@@ -808,15 +802,8 @@ export default function App() {
 
     const key = getAllOffCaptureKey(groupTitle, staffNames);
     setCompletedAllOffCaptures((previous) => {
-      const next = { ...previous, [key]: true as const };
-      try {
-        localStorage.setItem(
-          "office_all_off_group_captures",
-          JSON.stringify(next),
-        );
-      } catch (error) {
-        console.warn("캡쳐 완료 표시 저장 실패:", error);
-      }
+      const next = pruneAllOffCaptureMap({ ...previous, [key]: true as const });
+      persistAllOffCaptures(next);
       return next;
     });
   };
@@ -827,6 +814,7 @@ export default function App() {
     if (loading && isAuthenticated) {
       timeoutId = setTimeout(() => {
         setLoading(false);
+        setInitErrorKind(null);
         setInitError(
           "데이터를 불러오는 데 시간이 너무 오래 걸립니다. 네트워크 상태를 확인하거나 잠시 후 다시 시도해 주세요. (할당량 초과일 수 있습니다)",
         );
@@ -1869,15 +1857,15 @@ export default function App() {
   };
 
   useEffect(() => {
-    localStorage.setItem("office_selected_date", selectedDate);
+    safeSetItem("office_selected_date", selectedDate);
   }, [selectedDate]);
 
   useEffect(() => {
-    localStorage.setItem("office_view_mode", viewMode);
+    safeSetItem("office_view_mode", viewMode);
   }, [viewMode]);
 
   useEffect(() => {
-    localStorage.setItem(
+    safeSetItem(
       "office_is_staff_modal_open",
       String(isStaffModalOpen),
     );
@@ -1885,11 +1873,11 @@ export default function App() {
 
   useEffect(() => {
     const { initialSearchTerm, ...rest } = detailModal;
-    localStorage.setItem("office_detail_modal", JSON.stringify(rest));
+    safeSetItem("office_detail_modal", JSON.stringify(rest));
   }, [detailModal]);
 
   useEffect(() => {
-    localStorage.setItem("office_status_modal", JSON.stringify(statusModal));
+    safeSetItem("office_status_modal", JSON.stringify(statusModal));
   }, [statusModal]);
 
 
@@ -1897,7 +1885,7 @@ export default function App() {
   // Scroll position persistence
   useEffect(() => {
     const handleScroll = () => {
-      localStorage.setItem("office_scroll_y", String(window.scrollY));
+      safeSetItem("office_scroll_y", String(window.scrollY));
     };
     window.addEventListener("scroll", handleScroll);
     return () => window.removeEventListener("scroll", handleScroll);
@@ -1914,11 +1902,21 @@ export default function App() {
 
   const handleSubscriptionError = (err: any) => {
     console.error("Firestore Subscription Error:", err);
-    if (err?.message?.toLowerCase().includes("quota")) {
+    if (isBrowserStorageQuotaError(err)) {
+      setInitErrorKind("storage-quota");
+      setInitError(
+        "브라우저 저장 공간이 가득 찼습니다. 아래 버튼으로 이 사이트의 저장 데이터를 정리한 뒤 다시 로그인해 주세요.",
+      );
+    } else if (
+      err?.code === "resource-exhausted" ||
+      err?.message?.toLowerCase().includes("quota")
+    ) {
+      setInitErrorKind("firestore-quota");
       setInitError(
         "데이터베이스 일일 무료 사용량(읽기 한도)을 초과했습니다.\n\n현재 데이터를 정상적으로 불러올 수 없으며, 할당량은 오전에 갱신됩니다. 데이터베이스 요금제를 업그레이드 해주시면 원활한 사용이 가능합니다.",
       );
     } else {
+      setInitErrorKind("generic");
       setInitError(`데이터 연결에 문제가 발생했습니다: ${err?.message || "알 수 없는 오류"}`);
     }
   };
@@ -1931,6 +1929,7 @@ export default function App() {
         (data) => {
           setRecords(data);
           setLoading(false);
+          setInitErrorKind(null);
           setInitError(null);
         },
         (err) => {
@@ -2038,7 +2037,7 @@ export default function App() {
     e.preventDefault();
     // 사무실 비밀번호 설정 (원하시는 대로 변경 가능)
     if (password === "0724") {
-      localStorage.setItem("office_auth", "true");
+      safeSetItem("office_auth", "true");
       setIsAuthenticated(true);
       setAuthError(null);
     } else {
@@ -2060,7 +2059,13 @@ export default function App() {
       // Silenced to avoid test false positives from third-party/vite dev server errors
 
       // Optional: Show a user-friendly alert for certain errors
-      if (event.reason?.message && event.reason.message.includes("quota")) {
+      if (isBrowserStorageQuotaError(event.reason)) {
+        setInitErrorKind("storage-quota");
+        setInitError(
+          "브라우저 저장 공간이 가득 찼습니다. 아래 버튼으로 이 사이트의 저장 데이터를 정리한 뒤 다시 로그인해 주세요.",
+        );
+      } else if (event.reason?.message && event.reason.message.includes("quota")) {
+        setInitErrorKind("firestore-quota");
         setInitError(
           "일일 데이터 사용량(할당량)이 초과되었습니다. 내일 다시 정상 작동합니다.",
         );
@@ -2575,7 +2580,11 @@ export default function App() {
           exit={{ opacity: 0 }}
           className="min-h-screen bg-stone-50 flex flex-col items-center justify-center p-6 text-center"
         >
-          {initError.includes("할당량") || initError.includes("무료 사용량") || initError.toLowerCase().includes("quota") ? (
+          {initErrorKind !== "storage-quota" &&
+          (initErrorKind === "firestore-quota" ||
+            initError.includes("할당량") ||
+            initError.includes("무료 사용량") ||
+            initError.toLowerCase().includes("quota")) ? (
             <div className="bg-white border border-stone-200 rounded-2xl p-6 sm:p-8 max-w-md shadow-sm text-left">
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-12 h-12 bg-amber-50 rounded-full flex items-center justify-center shrink-0">
@@ -2658,16 +2667,7 @@ export default function App() {
                 </button>
                 <button
                   onClick={async () => {
-                    localStorage.clear();
-                    if ("serviceWorker" in navigator) {
-                      try {
-                        const registrations =
-                          await navigator.serviceWorker.getRegistrations();
-                        await Promise.all(registrations.map((r) => r.unregister()));
-                      } catch (e) {
-                        console.error(e);
-                      }
-                    }
+                    await clearAllSiteData();
                     window.location.reload();
                   }}
                   className="w-full py-2 text-stone-400 text-[10px] underline hover:text-stone-600"

@@ -2,6 +2,8 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App, { ErrorBoundary } from './App.tsx';
 import './index.css';
+import { ensureFirestore } from './firebase';
+import { consumePendingIndexedDbWipe } from './lib/siteStorage';
 
 // 전역 에러 핸들러 (React 마운트 전 오류 대비)
 window.onerror = (message, source, lineno, colno, error) => {
@@ -17,13 +19,33 @@ window.onunhandledrejection = (event) => {
 
 const rootElement = document.getElementById('root');
 if (rootElement) {
-  createRoot(rootElement).render(
-    <StrictMode>
-      <ErrorBoundary>
-        <App />
-      </ErrorBoundary>
-    </StrictMode>,
-  );
+  const root = createRoot(rootElement);
+  const renderApp = () => {
+    root.render(
+      <StrictMode>
+        <ErrorBoundary>
+          <App />
+        </ErrorBoundary>
+      </StrictMode>,
+    );
+  };
+  // 복구 직후엔 IndexedDB를 지운 다음에 Firestore 캐시를 연다. 그 외에는 바로 그린다.
+  if (
+    typeof sessionStorage !== "undefined" &&
+    sessionStorage.getItem("office_pending_indexeddb_wipe") === "1"
+  ) {
+    void (async () => {
+      try {
+        await consumePendingIndexedDbWipe();
+      } catch (error) {
+        console.warn("IndexedDB 정리 실패:", error);
+      }
+      ensureFirestore();
+      renderApp();
+    })();
+  } else {
+    renderApp();
+  }
 }
 
 // 서비스 워커 등록 (안전하게 개선)
