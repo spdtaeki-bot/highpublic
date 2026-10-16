@@ -121,6 +121,7 @@ import {
   safeSetItem,
 } from "./lib/siteStorage";
 import { CollectionRoundBadges } from "./components/CollectionRoundBadges";
+import { SearchField } from "./components/SearchField";
 import { ChoiceSetupModal } from "./components/ChoiceSetupModal";
 import { ChoiceActionModal } from "./components/ChoiceActionModal";
 import {
@@ -1882,13 +1883,20 @@ export default function App() {
 
 
 
-  // Scroll position persistence
+  // Scroll position persistence. 매 스크롤마다 저장하면 입력과 화면이 밀린다.
   useEffect(() => {
+    let timer = 0;
     const handleScroll = () => {
-      safeSetItem("office_scroll_y", String(window.scrollY));
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        safeSetItem("office_scroll_y", String(window.scrollY));
+      }, 400);
     };
-    window.addEventListener("scroll", handleScroll);
-    return () => window.removeEventListener("scroll", handleScroll);
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("scroll", handleScroll);
+    };
   }, []);
 
   useEffect(() => {
@@ -4929,6 +4937,7 @@ function StatusStaffModal({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const deferredSearchTerm = useDeferredValue(searchTerm);
   const longPressTimer = useRef<NodeJS.Timeout | null>(null);
   const touchPos = useRef<{ x: number; y: number } | null>(null);
   const isScrolling = useRef(false);
@@ -5020,8 +5029,8 @@ function StatusStaffModal({
 
     if (!matchType) return false;
 
-    if (searchTerm.trim()) {
-      const term = searchTerm.trim().toLowerCase();
+    if (deferredSearchTerm.trim()) {
+      const term = deferredSearchTerm.trim().toLowerCase();
       const affiliation = formatStaffNameComponents(s.name).affiliation.toLowerCase();
       return s.name.toLowerCase().includes(term) || affiliation.includes(term);
     }
@@ -5651,13 +5660,13 @@ function StatusStaffModal({
             {/* Search Bar */}
             <div className="relative w-full">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
-              <input
-                type="text"
+              <SearchField
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onValue={setSearchTerm}
                 onFocus={(e) => e.currentTarget.select()}
                 onClick={(e) => e.currentTarget.select()}
                 placeholder="직원 이름으로 검색..."
+                aria-label="직원 검색"
                 className="w-full bg-white border border-stone-200 rounded-xl pl-9 pr-8 py-2.5 text-xs font-bold text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-900/10 transition-all shadow-xs"
               />
               {searchTerm && (
@@ -6159,15 +6168,15 @@ function ManagementModal({
         <div className="px-4 sm:px-6 pt-3 pb-3 border-b border-stone-100 flex flex-col sm:flex-row gap-3 items-start sm:items-center">
           <div className="relative flex-1 w-full sm:max-w-xs">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-blue-400" />
-            <input
-              type="text"
+            <SearchField
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onValue={setSearchTerm}
               placeholder={
                 activeTab === "staff"
                   ? "직원 이름 검색..."
                   : "가게 이름 검색..."
               }
+              aria-label={activeTab === "staff" ? "직원 검색" : "가게 검색"}
               className="w-full bg-blue-50 border border-blue-100 rounded-lg pl-9 pr-3 py-2 text-xs focus:ring-2 focus:ring-blue-500/20 outline-none text-blue-900 placeholder:text-blue-300 font-bold"
             />
           </div>
@@ -8100,6 +8109,7 @@ function DetailBreakdownModal({
   );
   const [searchTerm, setSearchTerm] = useState(initialSearchTerm || "");
   const deferredSearchTerm = useDeferredValue(searchTerm);
+  const [historyDateLimit, setHistoryDateLimit] = useState(12);
   const [showShortageOnly, setShowShortageOnly] = useState(false);
   const [staffPaymentFilter, setStaffPaymentFilter] = useState<
     "UNPAID_ONLY" | "INCLUDE_PAID"
@@ -8115,6 +8125,10 @@ function DetailBreakdownModal({
 
   const [localRecords, setLocalRecords] = useState<DispatchRecord[]>([]);
   const customTimeInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setHistoryDateLimit(12);
+  }, [deferredSearchTerm, showShortageOnly, staffPaymentFilter]);
 
   const unpaidStaffStats = useMemo(() => {
     let unpaidCount = 0;
@@ -9200,11 +9214,11 @@ function DetailBreakdownModal({
           <div className="px-5 py-3 bg-stone-50 border-b border-stone-100 flex flex-col gap-2">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
-              <input
-                type="text"
+              <SearchField
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onValue={setSearchTerm}
                 placeholder="검색어 입력 (가게/직원 등)"
+                aria-label="내역 검색"
                 className="w-full bg-white border border-stone-200 rounded-xl pl-9 pr-4 py-2 text-[16px] font-bold focus:outline-none focus:ring-2 focus:ring-stone-900/10 transition-all"
               />
             </div>
@@ -9284,12 +9298,15 @@ function DetailBreakdownModal({
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {type === "unpaid" ? (
-            (
+            <>
+            {(
               data as [
                 string,
                 Record<string, { total: number; records: DispatchRecord[] }>,
               ][]
-            ).map(([date, establishments], index) => (
+            )
+              .slice(0, historyDateLimit)
+              .map(([date, establishments], index) => (
               <div
                 key={`${date}-${index}`}
                 className="space-y-3"
@@ -10072,7 +10089,17 @@ function DetailBreakdownModal({
                 })}
                 </div>
               </div>
-            ))
+            ))}
+            {(data as unknown[]).length > historyDateLimit && (
+              <button
+                type="button"
+                onClick={() => setHistoryDateLimit((count) => count + 12)}
+                className="w-full rounded-xl border border-stone-300 bg-white py-2 text-xs font-black text-stone-700 cursor-pointer"
+              >
+                이전 수금 날짜 더 보기 (남은 {(data as unknown[]).length - historyDateLimit}일)
+              </button>
+            )}
+            </>
           ) : type === "staffPayment" ? (
             <div className="space-y-8">
               {(
@@ -10089,7 +10116,7 @@ function DetailBreakdownModal({
                     },
                   ][],
                 ][]
-              ).map(([date, staffList]) => (
+              ).slice(0, historyDateLimit).map(([date, staffList]) => (
                 <div
                   key={date}
                   className="space-y-4"
@@ -10301,6 +10328,15 @@ function DetailBreakdownModal({
                   </div>
                 </div>
               ))}
+              {(data as unknown[]).length > historyDateLimit && (
+                <button
+                  type="button"
+                  onClick={() => setHistoryDateLimit((count) => count + 12)}
+                  className="w-full rounded-xl border border-stone-300 bg-white py-2 text-xs font-black text-stone-700 cursor-pointer"
+                >
+                  이전 날짜 더 보기 (남은 {(data as unknown[]).length - historyDateLimit}일)
+                </button>
+              )}
             </div>
           ) : (
             (data as [string, any][]).map(([name, value]) => (

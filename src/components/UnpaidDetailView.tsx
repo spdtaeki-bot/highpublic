@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useDeferredValue } from "react";
 import { format, parseISO } from "date-fns";
 import { ko } from "date-fns/locale";
 import {
@@ -38,6 +38,8 @@ import {
 import { BatchCollectForm } from "./BatchCollectForm";
 import { EstablishmentAdditionalCollectForm } from "./EstablishmentAdditionalCollectForm";
 import { CollectionRoundBadges } from "./CollectionRoundBadges";
+import { SearchField } from "./SearchField";
+import { unpaidEstablishmentSearchBlob } from "../lib/unpaidSearch";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -274,6 +276,8 @@ export function UnpaidDetailView({
   onFocusRecordComplete,
 }: UnpaidDetailViewProps) {
   const [searchTerm, setSearchTerm] = useState("");
+  const deferredSearchTerm = useDeferredValue(searchTerm);
+  const [dateRenderLimit, setDateRenderLimit] = useState(8);
   const [filterMode, setFilterMode] = useState<
     | "ALL_UNPAID"
     | "UNPAID_ONLY"
@@ -499,6 +503,7 @@ export function UnpaidDetailView({
           isFullyPaid: boolean;
           roundBreakdown: RoundBreakdownItem[];
           isBatchCollection: boolean;
+          searchBlob: string;
         }
       >
     > = {};
@@ -518,6 +523,7 @@ export function UnpaidDetailView({
           isFullyPaid: false,
           roundBreakdown: [],
           isBatchCollection: false,
+          searchBlob: "",
         };
       }
 
@@ -527,7 +533,7 @@ export function UnpaidDetailView({
 
     // Calculate establishment-level collections accurately
     Object.values(rawGroups).forEach((estMap) => {
-      Object.values(estMap).forEach((est) => {
+      Object.entries(estMap).forEach(([estName, est]) => {
         const calc = calculateEstablishmentCollection(est.records);
         est.totalRequested = calc.totalRequested;
         est.totalCollected = calc.totalCollected;
@@ -536,6 +542,7 @@ export function UnpaidDetailView({
         est.isFullyPaid = calc.isFullyPaid;
         est.roundBreakdown = calc.roundBreakdown;
         est.isBatchCollection = calc.isBatchCollection;
+        est.searchBlob = unpaidEstablishmentSearchBlob(estName, est.records);
       });
     });
 
@@ -579,6 +586,7 @@ export function UnpaidDetailView({
             isFullyPaid: boolean;
             roundBreakdown: RoundBreakdownItem[];
             isBatchCollection: boolean;
+            searchBlob: string;
           };
         } => Boolean(item),
       );
@@ -677,7 +685,7 @@ export function UnpaidDetailView({
       }>,
     ][] = [];
 
-    const lowerSearch = searchTerm.trim().toLowerCase();
+    const lowerSearch = deferredSearchTerm.trim().toLowerCase();
 
     // Sort dates descending
     const sortedDates = Object.keys(dateEstablishmentGroups).sort((a, b) =>
@@ -725,16 +733,7 @@ export function UnpaidDetailView({
         // 6. 완납 건만
         if (filterMode === "PAID_ONLY" && estData.unpaidAmount > 0) return;
 
-        if (lowerSearch) {
-          const matchEst = estName.toLowerCase().includes(lowerSearch);
-          const matchStaff = estData.records.some((r) =>
-            r.staffName?.toLowerCase().includes(lowerSearch),
-          );
-          const matchDepositor = estData.records.some((r) =>
-            r.depositorName?.toLowerCase().includes(lowerSearch),
-          );
-          if (!matchEst && !matchStaff && !matchDepositor) return;
-        }
+        if (lowerSearch && !estData.searchBlob.includes(lowerSearch)) return;
 
         filteredEsts.push({
           estName,
@@ -758,7 +757,22 @@ export function UnpaidDetailView({
     });
 
     return result;
-  }, [dateEstablishmentGroups, searchTerm, filterMode, selectedDate]);
+  }, [dateEstablishmentGroups, deferredSearchTerm, filterMode, selectedDate]);
+
+  useEffect(() => {
+    setDateRenderLimit(8);
+  }, [deferredSearchTerm, filterMode]);
+
+  useEffect(() => {
+    if (!focusRecordIds || focusRecordIds.length === 0) return;
+    const target = combinedRecords.find((record) => record.id === focusRecordIds[0]);
+    if (!target) return;
+    const date = getRecordBusinessDate(target);
+    const index = filteredDateGroups.findIndex(([groupDate]) => groupDate === date);
+    if (index >= dateRenderLimit) setDateRenderLimit(index + 1);
+  }, [focusRecordIds, combinedRecords, filteredDateGroups, dateRenderLimit]);
+
+  const visibleDateGroups = filteredDateGroups.slice(0, dateRenderLimit);
 
   // Relative Date Label
   const getRelativeDateLabel = (dateStr: string) => {
@@ -1253,11 +1267,11 @@ export function UnpaidDetailView({
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
           <div className="relative flex-1 min-w-0">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
-            <input
-              type="text"
+            <SearchField
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onValue={setSearchTerm}
               placeholder="업소명, 직원명, 입금자명으로 빠른 검색..."
+              aria-label="미수 검색"
               className="w-full bg-stone-50 border border-stone-200 rounded-xl pl-10 pr-8 py-2 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-stone-900/10 focus:bg-white transition-all"
             />
             {searchTerm && (
@@ -1485,7 +1499,7 @@ export function UnpaidDetailView({
         </div>
       ) : (
         <div className="space-y-6">
-          {filteredDateGroups.map(([date, establishments]) => {
+          {visibleDateGroups.map(([date, establishments]) => {
             const isExpanded = isDateExpanded(date);
             const dateTotalUnpaid = establishments.reduce(
               (sum, e) => sum + e.unpaidAmount,
@@ -1505,6 +1519,7 @@ export function UnpaidDetailView({
               <div
                 id={dateCardId}
                 key={date}
+                style={{ contentVisibility: "auto", containIntrinsicSize: "auto 280px" }}
                 className="bg-white border-2 border-stone-200 rounded-3xl overflow-hidden shadow-xs transition-all"
               >
                 {/* Date Header Accordion Bar */}
@@ -2241,6 +2256,15 @@ export function UnpaidDetailView({
               </div>
             );
           })}
+          {filteredDateGroups.length > visibleDateGroups.length && (
+            <button
+              type="button"
+              onClick={() => setDateRenderLimit((count) => count + 8)}
+              className="w-full rounded-2xl border border-stone-300 bg-white py-3 text-sm font-black text-stone-700 cursor-pointer"
+            >
+              이전 날짜 더 보기 ({filteredDateGroups.length - visibleDateGroups.length}일 남음)
+            </button>
+          )}
         </div>
       )}
 

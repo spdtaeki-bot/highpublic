@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   Wallet,
   Camera,
@@ -24,6 +24,7 @@ import {
   updateDispatch,
 } from "../services/dispatchService";
 import { Timestamp } from "firebase/firestore";
+import { SearchField } from "./SearchField";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -144,6 +145,201 @@ interface SettlementViewProps {
   bouncedRecords?: BouncedRecord[];
 }
 
+function SettlementStaffSearch({
+  affiliationGroups,
+  staff,
+  onStaffPaymentClick,
+}: {
+  affiliationGroups: {
+    affiliationName: string;
+    staffList: {
+      rawName: string;
+      displayName: string;
+      isDirect: boolean;
+      recordCount: number;
+      expectedDeposit: number;
+      isAllStaffPaid: boolean;
+    }[];
+  }[];
+  staff: Staff[];
+  onStaffPaymentClick: (staffName: string) => void;
+}) {
+  const [settlementStaffSearch, setSettlementStaffSearch] = useState("");
+  const deferredSettlementStaffSearch = useDeferredValue(settlementStaffSearch);
+
+  const settlementStaffSearchResults = useMemo(() => {
+    const query = deferredSettlementStaffSearch.trim().toLocaleLowerCase("ko");
+    if (!query) return [];
+    const compactQuery = query.replace(/\s+/g, "");
+
+    const searchableStaff = new Map<
+      string,
+      {
+        rawName: string;
+        displayName: string;
+        affiliationName: string;
+        isDirect: boolean;
+        recordCount: number;
+        expectedDeposit: number;
+        isAllStaffPaid: boolean;
+      }
+    >();
+
+    affiliationGroups.forEach((affiliation) => {
+      affiliation.staffList.forEach((staffMember) => {
+        searchableStaff.set(staffMember.rawName, {
+          ...staffMember,
+          affiliationName: affiliation.affiliationName,
+        });
+      });
+    });
+
+    staff.forEach((staffMember) => {
+      if (searchableStaff.has(staffMember.name)) return;
+      const parsed = parseStaffNameAndAffiliation(staffMember.name);
+      searchableStaff.set(staffMember.name, {
+        rawName: staffMember.name,
+        displayName: parsed.displayName,
+        affiliationName: parsed.affiliation,
+        isDirect: parsed.isDirect,
+        recordCount: 0,
+        expectedDeposit: 0,
+        isAllStaffPaid: false,
+      });
+    });
+
+    return Array.from(searchableStaff.values())
+      .filter((staffMember) => {
+        const searchableText = [
+          staffMember.rawName,
+          staffMember.displayName,
+          staffMember.affiliationName,
+        ]
+          .join(" ")
+          .toLocaleLowerCase("ko");
+        return (
+          searchableText.includes(query) ||
+          searchableText.replace(/\s+/g, "").includes(compactQuery)
+        );
+      })
+      .sort((a, b) => {
+        const aName = a.displayName.toLocaleLowerCase("ko");
+        const bName = b.displayName.toLocaleLowerCase("ko");
+        const aStartsWith = aName.startsWith(query);
+        const bStartsWith = bName.startsWith(query);
+        if (aStartsWith !== bStartsWith) return aStartsWith ? -1 : 1;
+        return a.displayName.localeCompare(b.displayName, "ko");
+      });
+  }, [affiliationGroups, deferredSettlementStaffSearch, staff]);
+
+  return (
+    <div className="relative z-20 w-full rounded-2xl border border-indigo-200 bg-white p-3 shadow-sm sm:p-4">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <Search className="h-4 w-4 shrink-0 text-indigo-600" />
+          <h3 className="text-xs font-black text-stone-800">
+            직원 개인 정산 검색
+          </h3>
+        </div>
+        <span className="text-[10px] font-bold text-stone-400">
+          직원을 선택하면 개인 정산창이 열립니다
+        </span>
+      </div>
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-indigo-500" />
+        <SearchField
+          value={settlementStaffSearch}
+          onValue={setSettlementStaffSearch}
+          onFocus={(event) => event.currentTarget.select()}
+          placeholder="직원 이름 또는 소속을 입력하세요"
+          aria-label="직원 개인 정산 검색"
+          className="h-11 w-full rounded-xl border-2 border-indigo-400 bg-indigo-50/30 pl-9 pr-10 text-sm font-black text-stone-900 outline-none transition-all placeholder:font-bold placeholder:text-stone-400 focus:border-indigo-600 focus:bg-white focus:ring-4 focus:ring-indigo-100"
+        />
+        {settlementStaffSearch && (
+          <button
+            type="button"
+            onClick={() => setSettlementStaffSearch("")}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-1 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700 cursor-pointer"
+            aria-label="직원 검색어 지우기"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      {settlementStaffSearch.trim() && (
+        <div className="mt-2 max-h-72 overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-lg">
+          {settlementStaffSearchResults.length > 0 ? (
+            <div className="divide-y divide-stone-100">
+              {settlementStaffSearchResults.map((staffMember) => (
+                <button
+                  key={`settlement-search-${staffMember.rawName}`}
+                  type="button"
+                  onClick={() => onStaffPaymentClick(staffMember.rawName)}
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-indigo-50 active:bg-indigo-100 cursor-pointer"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-sm font-black text-stone-900">
+                        {staffMember.displayName}
+                      </span>
+                      <span
+                        className={cn(
+                          "shrink-0 rounded px-1.5 py-0.5 text-[9px] font-black text-white",
+                          staffMember.isDirect
+                            ? "bg-amber-500"
+                            : "bg-purple-600",
+                        )}
+                      >
+                        {staffMember.isDirect ? "직속" : staffMember.affiliationName}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[10px] font-bold text-stone-500">
+                      {staffMember.recordCount > 0 ? (
+                        <>
+                          {staffMember.recordCount}건 · 최종입금{" "}
+                          {staffMember.expectedDeposit.toLocaleString()}원
+                        </>
+                      ) : (
+                        "해당일 정산 내역 없음"
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span
+                      className={cn(
+                        "rounded-lg px-2 py-1 text-[10px] font-black",
+                        staffMember.recordCount === 0
+                          ? "bg-stone-100 text-stone-500"
+                          : staffMember.isAllStaffPaid
+                          ? "bg-emerald-100 text-emerald-700"
+                          : "bg-amber-100 text-amber-700",
+                      )}
+                    >
+                      {staffMember.recordCount === 0
+                        ? "당일내역 없음"
+                        : staffMember.isAllStaffPaid
+                          ? "지급완료"
+                          : "미지급"}
+                    </span>
+                    <span className="rounded-lg bg-indigo-600 px-2.5 py-1.5 text-[10px] font-black text-white">
+                      정산
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="px-4 py-6 text-center text-xs font-bold text-stone-400">
+              해당 직원의 정산 내역이 없습니다.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SettlementView({
   records,
   unpaidStaffRecords,
@@ -164,7 +360,6 @@ export function SettlementView({
   // Modal state for Batch Affiliation Payment
   const [batchModalAffiliation, setBatchModalAffiliation] = useState<string | null>(null);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
-  const [settlementStaffSearch, setSettlementStaffSearch] = useState("");
   const [highlightedNavigationStaff, setHighlightedNavigationStaff] = useState<
     string | null
   >(null);
@@ -553,71 +748,6 @@ export function SettlementView({
     if (!batchModalAffiliation) return null;
     return affiliationGroups.find((a) => a.affiliationName === batchModalAffiliation) || null;
   }, [batchModalAffiliation, affiliationGroups]);
-
-  const settlementStaffSearchResults = useMemo(() => {
-    const query = settlementStaffSearch.trim().toLocaleLowerCase("ko");
-    if (!query) return [];
-    const compactQuery = query.replace(/\s+/g, "");
-
-    const searchableStaff = new Map<
-      string,
-      {
-        rawName: string;
-        displayName: string;
-        affiliationName: string;
-        isDirect: boolean;
-        recordCount: number;
-        expectedDeposit: number;
-        isAllStaffPaid: boolean;
-      }
-    >();
-
-    affiliationGroups.forEach((affiliation) => {
-      affiliation.staffList.forEach((staffMember) => {
-        searchableStaff.set(staffMember.rawName, {
-          ...staffMember,
-          affiliationName: affiliation.affiliationName,
-        });
-      });
-    });
-
-    staff.forEach((staffMember) => {
-      if (searchableStaff.has(staffMember.name)) return;
-      const parsed = parseStaffNameAndAffiliation(staffMember.name);
-      searchableStaff.set(staffMember.name, {
-        rawName: staffMember.name,
-        displayName: parsed.displayName,
-        affiliationName: parsed.affiliation,
-        isDirect: parsed.isDirect,
-        recordCount: 0,
-        expectedDeposit: 0,
-        isAllStaffPaid: false,
-      });
-    });
-
-    return Array.from(searchableStaff.values())
-      .filter((staffMember) => {
-        const searchableText = [
-          staffMember.rawName,
-          staffMember.displayName,
-          staffMember.affiliationName,
-        ]
-          .join(" ")
-          .toLocaleLowerCase("ko");
-        return (
-          searchableText.includes(query) ||
-          searchableText.replace(/\s+/g, "").includes(compactQuery)
-        );
-      })
-      .sort((a, b) => {
-        const aName = a.displayName.toLocaleLowerCase("ko");
-        const bName = b.displayName.toLocaleLowerCase("ko");
-        const aStartsWith = aName.startsWith(query);
-        const bStartsWith = bName.startsWith(query);
-        if (aStartsWith !== bStartsWith) return aStartsWith ? -1 : 1;
-        return a.displayName.localeCompare(b.displayName, "ko");
-      });
-  }, [affiliationGroups, settlementStaffSearch, staff]);
 
   // Batch Payment Handler for an entire Affiliation
   const handleBatchPayment = async (method: "TRANSFER" | "CASH" | "CANCEL") => {
@@ -1196,111 +1326,11 @@ export function SettlementView({
         </div>
       )}
 
-      {/* Individual Staff Settlement Search */}
-      <div className="relative z-20 w-full rounded-2xl border border-indigo-200 bg-white p-3 shadow-sm sm:p-4">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
-            <Search className="h-4 w-4 shrink-0 text-indigo-600" />
-            <h3 className="text-xs font-black text-stone-800">
-              직원 개인 정산 검색
-            </h3>
-          </div>
-          <span className="text-[10px] font-bold text-stone-400">
-            직원을 선택하면 개인 정산창이 열립니다
-          </span>
-        </div>
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-indigo-500" />
-          <input
-            type="text"
-            value={settlementStaffSearch}
-            onChange={(event) => setSettlementStaffSearch(event.target.value)}
-            onFocus={(event) => event.currentTarget.select()}
-            placeholder="직원 이름 또는 소속을 입력하세요"
-            className="h-11 w-full rounded-xl border-2 border-indigo-400 bg-indigo-50/30 pl-9 pr-10 text-sm font-black text-stone-900 outline-none transition-all placeholder:font-bold placeholder:text-stone-400 focus:border-indigo-600 focus:bg-white focus:ring-4 focus:ring-indigo-100"
-          />
-          {settlementStaffSearch && (
-            <button
-              type="button"
-              onClick={() => setSettlementStaffSearch("")}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-1 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700 cursor-pointer"
-              aria-label="직원 검색어 지우기"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-
-        {settlementStaffSearch.trim() && (
-          <div className="mt-2 max-h-72 overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-lg">
-            {settlementStaffSearchResults.length > 0 ? (
-              <div className="divide-y divide-stone-100">
-                {settlementStaffSearchResults.map((staffMember) => (
-                  <button
-                    key={`settlement-search-${staffMember.rawName}`}
-                    type="button"
-                    onClick={() => onStaffPaymentClick(staffMember.rawName)}
-                    className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-indigo-50 active:bg-indigo-100 cursor-pointer"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate text-sm font-black text-stone-900">
-                          {staffMember.displayName}
-                        </span>
-                        <span
-                          className={cn(
-                            "shrink-0 rounded px-1.5 py-0.5 text-[9px] font-black text-white",
-                            staffMember.isDirect
-                              ? "bg-amber-500"
-                              : "bg-purple-600",
-                          )}
-                        >
-                          {staffMember.isDirect ? "직속" : staffMember.affiliationName}
-                        </span>
-                      </div>
-                      <p className="mt-0.5 text-[10px] font-bold text-stone-500">
-                        {staffMember.recordCount > 0 ? (
-                          <>
-                            {staffMember.recordCount}건 · 최종입금{" "}
-                            {staffMember.expectedDeposit.toLocaleString()}원
-                          </>
-                        ) : (
-                          "해당일 정산 내역 없음"
-                        )}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span
-                        className={cn(
-                          "rounded-lg px-2 py-1 text-[10px] font-black",
-                          staffMember.recordCount === 0
-                            ? "bg-stone-100 text-stone-500"
-                            : staffMember.isAllStaffPaid
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-amber-100 text-amber-700",
-                        )}
-                      >
-                        {staffMember.recordCount === 0
-                          ? "당일내역 없음"
-                          : staffMember.isAllStaffPaid
-                            ? "지급완료"
-                            : "미지급"}
-                      </span>
-                      <span className="rounded-lg bg-indigo-600 px-2.5 py-1.5 text-[10px] font-black text-white">
-                        정산
-                      </span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="px-4 py-6 text-center text-xs font-bold text-stone-400">
-                해당 직원의 정산 내역이 없습니다.
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      <SettlementStaffSearch
+        affiliationGroups={affiliationGroups}
+        staff={staff}
+        onStaffPaymentClick={onStaffPaymentClick}
+      />
 
       {/* Affiliation Sections (Cards per Affiliation) */}
       {affiliationGroups.length === 0 ? (

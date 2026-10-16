@@ -10,6 +10,7 @@ import {
   Activity,
 } from "lucide-react";
 import { Staff } from "../types";
+import { SearchField } from "./SearchField";
 
 interface FloatingStaffSearchBarProps {
   staff: Staff[];
@@ -134,12 +135,11 @@ export function FloatingStaffSearchBar({
           <Search className="w-4 h-4" />
         </div>
 
-        <input
-          ref={inputRef}
-          type="text"
+        <SearchField
+          inputRef={inputRef}
           value={searchTerm}
-          onChange={(e) => {
-            setSearchTerm(e.target.value);
+          onValue={(next) => {
+            setSearchTerm(next);
             setIsOpen(true);
           }}
           onFocus={(e) => {
@@ -149,6 +149,7 @@ export function FloatingStaffSearchBar({
           onClick={(e) => e.currentTarget.select()}
           onKeyDown={handleKeyDown}
           placeholder="직원 이름 검색..."
+          aria-label="직원 이름 검색"
           className="min-w-0 flex-1 bg-transparent text-xs sm:text-sm font-bold text-white placeholder:text-stone-400 placeholder:font-medium focus:outline-none py-1"
         />
 

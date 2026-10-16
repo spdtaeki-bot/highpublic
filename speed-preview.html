@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko" style="color-scheme: light only">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="color-scheme" content="light only" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <style>
+      html, body {
+        color-scheme: light only;
+        width: 100%;
+        max-width: 100vw;
+        overflow-x: clip;
+        overscroll-behavior-x: none;
+        touch-action: manipulation;
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      *, *::before, *::after {
+        box-sizing: border-box;
+      }
+    </style>
+    <title>정산프로그램 속도 미리보기 (샘플)</title>
+    <meta name="description" content="일일 사무실 정산 및 파견 관리 시스템" />
+    <meta property="og:title" content="정산프로그램" />
+    <meta property="og:description" content="일일 사무실 정산 및 파견 관리 시스템" />
+    <meta name="robots" content="noindex" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/speedPreviewMain.tsx"></script>
+  </body>
+</html>
