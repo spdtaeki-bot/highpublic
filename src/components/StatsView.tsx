@@ -87,6 +87,41 @@ export interface StaffStatItem {
   bouncedRecords: BouncedRecord[];
 }
 
+type MonthlyAttendance = Array<{
+  date: string;
+  staffIds: string[];
+  checkInTimes?: Record<string, any>;
+}>;
+
+interface MonthlyStatsCache {
+  dispatches: DispatchRecord[];
+  bounced: BouncedRecord[];
+  attendance: MonthlyAttendance;
+  dispatchesReady: boolean;
+}
+
+const monthlyStatsCache = new Map<string, MonthlyStatsCache>();
+
+function getCachedMonth(month: string): MonthlyStatsCache | undefined {
+  return monthlyStatsCache.get(month);
+}
+
+function updateCachedMonth(
+  month: string,
+  update: Partial<MonthlyStatsCache>,
+): MonthlyStatsCache {
+  const next = {
+    dispatches: [],
+    bounced: [],
+    attendance: [],
+    dispatchesReady: false,
+    ...monthlyStatsCache.get(month),
+    ...update,
+  };
+  monthlyStatsCache.set(month, next);
+  return next;
+}
+
 const formatRecordTime = (timeVal: any) => {
   if (!timeVal) return "";
   try {
@@ -167,7 +202,7 @@ const compareBusinessRecords = (
   return getBusinessMinutes(aTimeVal) - getBusinessMinutes(bTimeVal);
 };
 
-export const StatsView: React.FC<StatsViewProps> = ({
+const StatsViewComponent: React.FC<StatsViewProps> = ({
   staff,
   selectedDate,
   onSelectDate,
@@ -179,12 +214,18 @@ export const StatsView: React.FC<StatsViewProps> = ({
   });
 
   // Data states for the current month
-  const [monthlyDispatches, setMonthlyDispatches] = useState<DispatchRecord[]>([]);
-  const [monthlyBounced, setMonthlyBounced] = useState<BouncedRecord[]>([]);
-  const [monthlyAttendance, setMonthlyAttendance] = useState<
-    Array<{ date: string; staffIds: string[]; checkInTimes?: Record<string, any> }>
-  >([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [monthlyDispatches, setMonthlyDispatches] = useState<DispatchRecord[]>(
+    () => getCachedMonth(currentMonth)?.dispatches || [],
+  );
+  const [monthlyBounced, setMonthlyBounced] = useState<BouncedRecord[]>(
+    () => getCachedMonth(currentMonth)?.bounced || [],
+  );
+  const [monthlyAttendance, setMonthlyAttendance] = useState<MonthlyAttendance>(
+    () => getCachedMonth(currentMonth)?.attendance || [],
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => !getCachedMonth(currentMonth)?.dispatchesReady,
+  );
 
   // Filters & Search
   const [searchTerm, setSearchTerm] = useState("");
@@ -220,7 +261,11 @@ export const StatsView: React.FC<StatsViewProps> = ({
 
   // Subscribe to month data
   useEffect(() => {
-    setIsLoading(true);
+    const cached = getCachedMonth(currentMonth);
+    setMonthlyDispatches(cached?.dispatches || []);
+    setMonthlyBounced(cached?.bounced || []);
+    setMonthlyAttendance(cached?.attendance || []);
+    setIsLoading(!cached?.dispatchesReady);
 
     // Safety timeout to prevent indefinite buffering on slow/mobile networks
     const safetyTimer = setTimeout(() => {
@@ -231,6 +276,10 @@ export const StatsView: React.FC<StatsViewProps> = ({
       monthStart,
       monthEnd,
       (data) => {
+        updateCachedMonth(currentMonth, {
+          dispatches: data,
+          dispatchesReady: true,
+        });
         setMonthlyDispatches(data);
         setIsLoading(false);
       },
@@ -244,6 +293,7 @@ export const StatsView: React.FC<StatsViewProps> = ({
       monthStart,
       monthEnd,
       (data) => {
+        updateCachedMonth(currentMonth, { bounced: data });
         setMonthlyBounced(data);
       },
       (err) => {
@@ -255,6 +305,7 @@ export const StatsView: React.FC<StatsViewProps> = ({
       monthStart,
       monthEnd,
       (data) => {
+        updateCachedMonth(currentMonth, { attendance: data });
         setMonthlyAttendance(data);
       },
       (err) => {
@@ -268,7 +319,7 @@ export const StatsView: React.FC<StatsViewProps> = ({
       unsubBounced();
       unsubAttendance();
     };
-  }, [monthStart, monthEnd]);
+  }, [currentMonth, monthStart, monthEnd]);
 
   // Month navigation
   const handlePrevMonth = () => {
@@ -2196,3 +2247,5 @@ export const StatsView: React.FC<StatsViewProps> = ({
     </div>
   );
 };
+
+export const StatsView = React.memo(StatsViewComponent);

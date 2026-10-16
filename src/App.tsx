@@ -7,6 +7,7 @@ import React, {
   ReactNode,
   ErrorInfo,
   useDeferredValue,
+  useCallback,
   lazy,
   Suspense,
 } from "react";
@@ -941,32 +942,12 @@ export default function App() {
     mode: "list" | "settlement" | "unpaid" | "stats",
   ) => {
     setViewMode(mode);
-
-    const jumpToViewContent = () => {
-      const section = document.getElementById("view-content-section");
-      if (!section) return;
-
-      const fixedHeaderOffset = window.innerWidth >= 640 ? 72 : 64;
-      const targetTop = Math.max(
-        0,
-        section.getBoundingClientRect().top +
-          window.scrollY -
-          fixedHeaderOffset,
-      );
-      document.documentElement.scrollTop = targetTop;
-      document.body.scrollTop = targetTop;
-    };
-
-    requestAnimationFrame(() => {
-      jumpToViewContent();
-      requestAnimationFrame(jumpToViewContent);
-    });
-
-    // Lazy-loaded views can initially be too short to reach the anchor.
-    // Re-apply the same instant jump after their layout has expanded.
-    window.setTimeout(jumpToViewContent, 120);
-    window.setTimeout(jumpToViewContent, 350);
   };
+
+  const handleStatsSelectDate = useCallback((date: string) => {
+    setSelectedDate(date);
+    setViewMode("list");
+  }, []);
 
   const handleViewDispatchRecord = (record: DispatchRecord) => {
     if (!record.id) {
@@ -1880,33 +1861,6 @@ export default function App() {
   useEffect(() => {
     safeSetItem("office_status_modal", JSON.stringify(statusModal));
   }, [statusModal]);
-
-
-
-  // Scroll position persistence. 매 스크롤마다 저장하면 입력과 화면이 밀린다.
-  useEffect(() => {
-    let timer = 0;
-    const handleScroll = () => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        safeSetItem("office_scroll_y", String(window.scrollY));
-      }, 400);
-    };
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener("scroll", handleScroll);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!loading && isAuthenticated) {
-      const savedScroll = localStorage.getItem("office_scroll_y");
-      if (savedScroll) {
-        window.scrollTo(0, parseInt(savedScroll));
-      }
-    }
-  }, [loading, isAuthenticated]);
 
   const handleSubscriptionError = (err: any) => {
     console.error("Firestore Subscription Error:", err);
@@ -2938,7 +2892,9 @@ export default function App() {
               {/* Fixed header height spacer so content starts directly below it without jump */}
               <div className="h-14 sm:h-16 w-full shrink-0 pointer-events-none" aria-hidden="true" />
 
-              <main className="max-w-5xl mx-auto px-2.5 sm:px-4 py-4 sm:py-8 w-full max-w-full overflow-x-clip">
+              <main className="max-w-5xl mx-auto px-2.5 sm:px-4 pt-4 sm:pt-8 pb-28 w-full max-w-full overflow-x-clip">
+                {viewMode === "list" && (
+                  <>
                 {/* Dashboard Stats */}
                 {loading && (
                   <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-stone-900 text-white px-4 py-2 rounded-full text-xs font-bold shadow-lg flex flex-col items-center gap-2 animate-bounce">
@@ -4401,7 +4357,9 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                </div>
+                  </div>
+                  </>
+                )}
 
                 {/* Actions */}
                 <div
@@ -4468,10 +4426,7 @@ export default function App() {
                       <StatsView
                         staff={staff}
                         selectedDate={selectedDate}
-                        onSelectDate={(date) => {
-                          setSelectedDate(date);
-                          setViewMode("list");
-                        }}
+                        onSelectDate={handleStatsSelectDate}
                         staffRenameMap={staffRenameMap}
                       />
                     ) : viewMode === "unpaid" ? (

@@ -1132,7 +1132,7 @@ export function UnpaidDetailView({
   };
 
   return (
-    <div className="space-y-5 animate-in fade-in duration-200">
+    <div className="space-y-5 pb-24 sm:pb-28 animate-in fade-in duration-200">
       {/* Top Header & KPI Metric Dashboard */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {/* KPI 1: 총 누적 미수금 */}
