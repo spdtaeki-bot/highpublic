@@ -30,7 +30,18 @@ if (rootElement) {
     );
   };
   // 복구 직후엔 IndexedDB를 지운 다음에 Firestore 캐시를 연다. 그 외에는 바로 그린다.
-  if (
+  const depositMatchPreview =
+    import.meta.env.DEV &&
+    new URLSearchParams(window.location.search).has("depositMatchPreview");
+  if (depositMatchPreview) {
+    void import("./components/DepositMatchPreview.tsx").then(({ DepositMatchPreview }) => {
+      root.render(
+        <StrictMode>
+          <DepositMatchPreview />
+        </StrictMode>,
+      );
+    });
+  } else if (
     typeof sessionStorage !== "undefined" &&
     sessionStorage.getItem("office_pending_indexeddb_wipe") === "1"
   ) {
