@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useDeferredValue } from "react";
 import { format, parseISO } from "date-fns";
 import { ko } from "date-fns/locale";
 import {
@@ -38,6 +38,12 @@ import {
 import { BatchCollectForm } from "./BatchCollectForm";
 import { EstablishmentAdditionalCollectForm } from "./EstablishmentAdditionalCollectForm";
 import { CollectionRoundBadges } from "./CollectionRoundBadges";
+import { SearchField } from "./SearchField";
+import { DepositMatchPanel } from "./DepositMatchPanel";
+import {
+  buildSharedAccountCollectionUpdate,
+  collectableBucketsFromRecords,
+} from "../lib/depositMatch";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -274,6 +280,9 @@ export function UnpaidDetailView({
   onFocusRecordComplete,
 }: UnpaidDetailViewProps) {
   const [searchTerm, setSearchTerm] = useState("");
+  const deferredSearchTerm = useDeferredValue(searchTerm);
+  const [dateRenderLimit, setDateRenderLimit] = useState(8);
+  const [depositMatchOpen, setDepositMatchOpen] = useState(false);
   const [filterMode, setFilterMode] = useState<
     | "ALL_UNPAID"
     | "UNPAID_ONLY"
@@ -499,6 +508,7 @@ export function UnpaidDetailView({
           isFullyPaid: boolean;
           roundBreakdown: RoundBreakdownItem[];
           isBatchCollection: boolean;
+          searchBlob: string;
         }
       >
     > = {};
@@ -518,6 +528,7 @@ export function UnpaidDetailView({
           isFullyPaid: false,
           roundBreakdown: [],
           isBatchCollection: false,
+          searchBlob: "",
         };
       }
 
@@ -527,7 +538,7 @@ export function UnpaidDetailView({
 
     // Calculate establishment-level collections accurately
     Object.values(rawGroups).forEach((estMap) => {
-      Object.values(estMap).forEach((est) => {
+      Object.entries(estMap).forEach(([estName, est]) => {
         const calc = calculateEstablishmentCollection(est.records);
         est.totalRequested = calc.totalRequested;
         est.totalCollected = calc.totalCollected;
@@ -536,6 +547,17 @@ export function UnpaidDetailView({
         est.isFullyPaid = calc.isFullyPaid;
         est.roundBreakdown = calc.roundBreakdown;
         est.isBatchCollection = calc.isBatchCollection;
+        est.searchBlob = [
+          estName,
+          ...est.records.flatMap((record) => [
+            record.staffName,
+            record.depositorName,
+            ...(record.collectionHistory || []).map((entry) => entry.depositorName),
+          ]),
+        ]
+          .filter(Boolean)
+          .join("\n")
+          .toLowerCase();
       });
     });
 
@@ -579,6 +601,7 @@ export function UnpaidDetailView({
             isFullyPaid: boolean;
             roundBreakdown: RoundBreakdownItem[];
             isBatchCollection: boolean;
+            searchBlob: string;
           };
         } => Boolean(item),
       );
@@ -677,7 +700,7 @@ export function UnpaidDetailView({
       }>,
     ][] = [];
 
-    const lowerSearch = searchTerm.trim().toLowerCase();
+    const lowerSearch = deferredSearchTerm.trim().toLowerCase();
 
     // Sort dates descending
     const sortedDates = Object.keys(dateEstablishmentGroups).sort((a, b) =>
@@ -725,16 +748,7 @@ export function UnpaidDetailView({
         // 6. 완납 건만
         if (filterMode === "PAID_ONLY" && estData.unpaidAmount > 0) return;
 
-        if (lowerSearch) {
-          const matchEst = estName.toLowerCase().includes(lowerSearch);
-          const matchStaff = estData.records.some((r) =>
-            r.staffName?.toLowerCase().includes(lowerSearch),
-          );
-          const matchDepositor = estData.records.some((r) =>
-            r.depositorName?.toLowerCase().includes(lowerSearch),
-          );
-          if (!matchEst && !matchStaff && !matchDepositor) return;
-        }
+        if (lowerSearch && !estData.searchBlob.includes(lowerSearch)) return;
 
         filteredEsts.push({
           estName,
@@ -758,7 +772,16 @@ export function UnpaidDetailView({
     });
 
     return result;
-  }, [dateEstablishmentGroups, searchTerm, filterMode, selectedDate]);
+  }, [dateEstablishmentGroups, deferredSearchTerm, filterMode, selectedDate]);
+
+  useEffect(() => {
+    setDateRenderLimit(8);
+  }, [deferredSearchTerm, filterMode]);
+
+  const depositBuckets = useMemo(
+    () => collectableBucketsFromRecords(combinedRecords, getRecordBusinessDate),
+    [combinedRecords],
+  );
 
   // Relative Date Label
   const getRelativeDateLabel = (dateStr: string) => {
@@ -849,6 +872,7 @@ export function UnpaidDetailView({
     depositorName: string = "",
     forceCollect: boolean = false,
     customTotalAmount?: number,
+    year?: number,
   ) => {
     try {
       let collectedAt = new Date();
@@ -857,7 +881,11 @@ export function UnpaidDetailView({
         const day = parseInt(dateStr.slice(2, 4), 10);
         const hour = parseInt(timeStr.slice(0, 2), 10);
         const minute = parseInt(timeStr.slice(2, 4), 10);
-        collectedAt.setMonth(month, day);
+        if (typeof year === "number" && year > 1900) {
+          collectedAt.setFullYear(year, month, day);
+        } else {
+          collectedAt.setMonth(month, day);
+        }
         collectedAt.setHours(hour, minute, 0, 0);
 
         if (!forceCollect) {
@@ -895,6 +923,7 @@ export function UnpaidDetailView({
                   depositorName,
                   true,
                   customTotalAmount,
+                  year,
                 );
               },
             });
@@ -920,30 +949,16 @@ export function UnpaidDetailView({
           : batchOriginalTotal;
 
       const newBatchTimestamp = Timestamp.fromDate(collectedAt);
-      const newEstEntry: CollectionHistoryEntry = {
+      const updates = buildSharedAccountCollectionUpdate({
         collectedAt: newBatchTimestamp,
+        method,
+        depositorName,
         amount: totalAmountToCollect,
-        paymentMethod: method,
-        ...(depositorName ? { depositorName } : {}),
-        note: "1차 수금",
-        isOnSite: false,
-        // 업소 단위 공용 원장 항목 (대상 기록 전체에 동일 복제, 합산 시 한 번만)
-        isShared: true,
-      };
+        isPass,
+      });
 
       // 미수(UNPAID) 기록만 대상. 이미 현장 수금된 기록은 절대 건드리지 않는다.
       const updatePromises = unpaidRecords.map(async (r) => {
-        const updates = {
-          paymentMethod: method,
-          collectedAt: newBatchTimestamp,
-          additionalCollectedAt: null,
-          collectionHistory: [newEstEntry],
-          isPass: isPass,
-          isDispatchBoxCollection: false,
-          depositorName: depositorName || null,
-          collectedAmount: undefined,
-        };
-
         if (r.id) {
           await applyRecordUpdate(r.id, updates as any);
         }
@@ -1117,6 +1132,17 @@ export function UnpaidDetailView({
     });
   };
 
+  const visibleDateGroups = filteredDateGroups.slice(0, dateRenderLimit);
+
+  useEffect(() => {
+    if (!focusRecordIds || focusRecordIds.length === 0) return;
+    const target = combinedRecords.find((record) => record.id === focusRecordIds[0]);
+    if (!target) return;
+    const date = getRecordBusinessDate(target);
+    const index = filteredDateGroups.findIndex(([groupDate]) => groupDate === date);
+    if (index >= dateRenderLimit) setDateRenderLimit(index + 1);
+  }, [focusRecordIds, combinedRecords, filteredDateGroups, dateRenderLimit]);
+
   return (
     <div className="space-y-5 animate-in fade-in duration-200">
       {/* Top Header & KPI Metric Dashboard */}
@@ -1253,11 +1279,11 @@ export function UnpaidDetailView({
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
           <div className="relative flex-1 min-w-0">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
-            <input
-              type="text"
+            <SearchField
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onValue={setSearchTerm}
               placeholder="업소명, 직원명, 입금자명으로 빠른 검색..."
+              aria-label="미수 검색"
               className="w-full bg-stone-50 border border-stone-200 rounded-xl pl-10 pr-8 py-2 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-stone-900/10 focus:bg-white transition-all"
             />
             {searchTerm && (
@@ -1271,6 +1297,13 @@ export function UnpaidDetailView({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setDepositMatchOpen(true)}
+              className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap active:scale-95"
+            >
+              입금 대조
+            </button>
             <button
               onClick={handleToggleAllExpand}
               className="px-3 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap active:scale-95"
@@ -1485,7 +1518,7 @@ export function UnpaidDetailView({
         </div>
       ) : (
         <div className="space-y-6">
-          {filteredDateGroups.map(([date, establishments]) => {
+          {visibleDateGroups.map(([date, establishments]) => {
             const isExpanded = isDateExpanded(date);
             const dateTotalUnpaid = establishments.reduce(
               (sum, e) => sum + e.unpaidAmount,
@@ -1505,6 +1538,7 @@ export function UnpaidDetailView({
               <div
                 id={dateCardId}
                 key={date}
+                style={{ contentVisibility: "auto", containIntrinsicSize: "auto 280px" }}
                 className="bg-white border-2 border-stone-200 rounded-3xl overflow-hidden shadow-xs transition-all"
               >
                 {/* Date Header Accordion Bar */}
@@ -2241,6 +2275,15 @@ export function UnpaidDetailView({
               </div>
             );
           })}
+          {filteredDateGroups.length > visibleDateGroups.length && (
+            <button
+              type="button"
+              onClick={() => setDateRenderLimit((count) => count + 8)}
+              className="w-full rounded-2xl border border-stone-300 bg-white py-3 text-sm font-black text-stone-700"
+            >
+              이전 날짜 더 보기 ({filteredDateGroups.length - visibleDateGroups.length}일 남음)
+            </button>
+          )}
         </div>
       )}
 
@@ -2867,6 +2910,34 @@ export function UnpaidDetailView({
           </div>
         )}
       </AnimatePresence>
+      {depositMatchOpen && (
+        <DepositMatchPanel
+          records={combinedRecords}
+          buckets={depositBuckets}
+          onClose={() => setDepositMatchOpen(false)}
+          onApplyBatch={(
+            targetRecords,
+            method,
+            dateStr,
+            timeStr,
+            depositorName,
+            customAmount,
+            year,
+          ) =>
+            handleBatchCollect(
+              targetRecords,
+              method,
+              dateStr,
+              timeStr,
+              false,
+              depositorName,
+              true,
+              customAmount,
+              year,
+            )
+          }
+        />
+      )}
     </div>
   );
 }
