@@ -41,11 +41,13 @@ export function DepositMatchPanel({
   onClose,
   onApplyBatch,
   initialText = "",
+  intro,
 }: {
   records: DispatchRecord[];
   buckets: CollectableBucket[];
   onClose: () => void;
   initialText?: string;
+  intro?: React.ReactNode;
   onApplyBatch: (
     records: DispatchRecord[],
     method: PaymentMethod,
@@ -207,6 +209,7 @@ export function DepositMatchPanel({
         </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-5">
+          {intro}
           <textarea
             value={text}
             onChange={(event) => setText(event.target.value)}

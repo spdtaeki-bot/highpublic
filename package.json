@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/lib/depositMatch.test.ts"
+    "test": "tsx --test src/lib/depositMatch.test.ts",
+    "build:deposit-preview": "vite build --config vite.preview.config.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

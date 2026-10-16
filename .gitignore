@@ -1,6 +1,7 @@
 node_modules/
 build/
 dist/
+deposit-preview-site/
 coverage/
 .DS_Store
 *.log

@@ -67,8 +67,9 @@ const records: DispatchRecord[] = [
 ];
 
 /**
- * 개발 서버에서만 연다. `/?depositMatchPreview=1`
- * 샘플 미수만 보여 주고 Firestore 에는 쓰지 않는다.
+ * 샘플 미수만 보여 주고 Firestore 에는 연결하지 않는다.
+ * 개발 서버: `/?depositMatchPreview=1`
+ * 공개 미리보기 페이지는 `deposit-preview.html` 만 연다.
  */
 export function DepositMatchPreview() {
   const [log, setLog] = useState<string>("아직 기록 호출이 없습니다.");
@@ -87,6 +88,7 @@ export function DepositMatchPreview() {
         records={records}
         buckets={buckets}
         initialText={SAMPLE}
+        intro={<PreviewIntro />}
         onClose={() => undefined}
         onApplyBatch={async (targetRecords, _method, dateStr, timeStr, depositorName, amount, year) => {
           const summary: AccountCollectionWrite = {
@@ -104,6 +106,26 @@ export function DepositMatchPreview() {
         }}
       />
       <SamplePaste />
+    </div>
+  );
+}
+
+function PreviewIntro() {
+  return (
+    <div className="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-bold leading-relaxed text-amber-950">
+      <p>샘플 전용입니다. 운영 사이트와 Firestore에는 연결하지 않습니다. 승인해도 서버에 쓰지 않습니다.</p>
+      <p className="mt-1">
+        입력칸에 샘플 입금내역이 이미 들어 있습니다. 지웠다면 아래를 다시 붙여 넣으세요.
+      </p>
+      <pre className="mt-1 whitespace-pre-wrap rounded-xl bg-white px-2 py-1.5 font-bold text-stone-700">
+        {SAMPLE}
+      </pre>
+      <p className="mt-1">
+        샘플 미수는 홍콩 80,000원, 리치 80,000원, 어우동 150,000원입니다. 홍콩에는 10월 15일 09:00 김태강 80,000원 수금이 이미 있습니다.
+      </p>
+      <p className="mt-1">
+        기대 결과: 홍콩 / 김태강 / 80,000 / 일치 · 리치 / 커피티씨 / 80,000 / 일치 · 어우동 / 송한빈 / 200,000 / 초과 · 업소 불명 / 없는사람 / 10,000 / 업소 불명 · 홍콩 / 김태강 / 80,000 / 중복 의심
+      </p>
     </div>
   );
 }
