@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useDeferredValue } from "react";
 import {
   BarChart3,
   Calendar,
@@ -29,6 +29,7 @@ import * as htmlToImage from "html-to-image";
 import { format, parseISO, startOfMonth, endOfMonth, addMonths, subMonths } from "date-fns";
 import { ko } from "date-fns/locale";
 import { cn } from "../lib/utils";
+import { SearchField } from "./SearchField";
 import { Staff, DispatchRecord, BouncedRecord } from "../types";
 import {
   subscribeToDispatchesByDateRange,
@@ -187,6 +188,7 @@ export const StatsView: React.FC<StatsViewProps> = ({
 
   // Filters & Search
   const [searchTerm, setSearchTerm] = useState("");
+  const deferredSearchTerm = useDeferredValue(searchTerm);
   const [selectedAffiliation, setSelectedAffiliation] = useState<string>("ALL");
   const [selectedCategory, setSelectedCategory] = useState<string>("ALL");
   const [selectedEmployment, setSelectedEmployment] = useState<"ALL" | "DIRECT" | "DELEGATED">("ALL");
@@ -564,11 +566,11 @@ export const StatsView: React.FC<StatsViewProps> = ({
     let result = staffStatsList.filter((item) => {
       // Exclude staff with zero activity across attendance, dispatches, and bounces unless searching
       const hasActivity = item.attendanceDays > 0 || item.dispatchCount > 0 || item.bounceCount > 0;
-      if (!hasActivity && !searchTerm) return false;
+      if (!hasActivity && !deferredSearchTerm) return false;
 
       // Search
-      if (searchTerm) {
-        const term = searchTerm.toLowerCase();
+      if (deferredSearchTerm) {
+        const term = deferredSearchTerm.toLowerCase();
         const matchName = item.name.toLowerCase().includes(term);
         const matchAff = item.affiliation.toLowerCase().includes(term);
         if (!matchName && !matchAff) return false;
@@ -618,7 +620,7 @@ export const StatsView: React.FC<StatsViewProps> = ({
     return result;
   }, [
     staffStatsList,
-    searchTerm,
+    deferredSearchTerm,
     selectedAffiliation,
     selectedEmployment,
     selectedCategory,
@@ -1259,11 +1261,11 @@ export const StatsView: React.FC<StatsViewProps> = ({
             {/* Search Input */}
             <div className="relative flex-1 max-w-md">
               <Search className="w-4 h-4 text-stone-600 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
+              <SearchField
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onValue={setSearchTerm}
                 placeholder="직원 이름 또는 소속 검색 (예: 시아, 베리, 시크)..."
+                aria-label="통계 검색"
                 className="w-full h-10 pl-9 pr-8 text-xs sm:text-sm rounded-xl bg-white border-2 border-stone-400 shadow-sm placeholder:text-stone-500 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-200 outline-none transition-all font-medium"
               />
               {searchTerm && (

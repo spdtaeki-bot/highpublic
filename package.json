@@ -9,7 +9,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "tsx --test src/lib/unpaidSearch.test.ts src/lib/searchPaste.test.ts src/preview/unpaidRenderCheck.test.ts",
+    "build:speed-preview": "vite build --config vite.preview.config.ts && cp speed-preview-site/speed-preview.html speed-preview-site/index.html"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
