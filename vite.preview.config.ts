@@ -11,6 +11,7 @@ const emptyFirebaseConfig = path.resolve(__dirname, "src/preview/empty-firebase-
  */
 export default defineConfig({
   base: "./",
+  publicDir: false,
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: [
