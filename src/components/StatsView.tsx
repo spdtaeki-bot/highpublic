@@ -37,6 +37,7 @@ import {
   subscribeToAttendanceByDateRange,
 } from "../services/dispatchService";
 import { parseStaffNameAndAffiliation } from "./SettlementView";
+import { shouldApplyStatsDispatchSnapshot } from "../lib/statsSnapshot";
 
 interface StatsViewProps {
   staff: Staff[];
@@ -98,6 +99,7 @@ interface MonthlyStatsCache {
   bounced: BouncedRecord[];
   attendance: MonthlyAttendance;
   dispatchesReady: boolean;
+  dispatchesServerReady: boolean;
 }
 
 const monthlyStatsCache = new Map<string, MonthlyStatsCache>();
@@ -115,6 +117,7 @@ function updateCachedMonth(
     bounced: [],
     attendance: [],
     dispatchesReady: false,
+    dispatchesServerReady: false,
     ...monthlyStatsCache.get(month),
     ...update,
   };
@@ -226,6 +229,7 @@ const StatsViewComponent: React.FC<StatsViewProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(
     () => !getCachedMonth(currentMonth)?.dispatchesReady,
   );
+  const subscriptionGenerationRef = useRef(0);
 
   // Filters & Search
   const [searchTerm, setSearchTerm] = useState("");
@@ -261,6 +265,7 @@ const StatsViewComponent: React.FC<StatsViewProps> = ({
 
   // Subscribe to month data
   useEffect(() => {
+    const generation = ++subscriptionGenerationRef.current;
     const cached = getCachedMonth(currentMonth);
     setMonthlyDispatches(cached?.dispatches || []);
     setMonthlyBounced(cached?.bounced || []);
@@ -269,21 +274,37 @@ const StatsViewComponent: React.FC<StatsViewProps> = ({
 
     // Safety timeout to prevent indefinite buffering on slow/mobile networks
     const safetyTimer = setTimeout(() => {
-      setIsLoading(false);
+      if (subscriptionGenerationRef.current === generation) {
+        setIsLoading(false);
+      }
     }, 3500);
 
     const unsubDispatches = subscribeToDispatchesByDateRange(
       monthStart,
       monthEnd,
-      (data) => {
+      (data, metadata) => {
+        if (subscriptionGenerationRef.current !== generation) return;
+        const latestCached = getCachedMonth(currentMonth);
+        if (
+          !shouldApplyStatsDispatchSnapshot(
+            Boolean(latestCached?.dispatchesServerReady),
+            metadata.fromCache,
+          )
+        ) {
+          return;
+        }
         updateCachedMonth(currentMonth, {
           dispatches: data,
           dispatchesReady: true,
+          dispatchesServerReady:
+            Boolean(latestCached?.dispatchesServerReady) ||
+            (!metadata.fromCache && !metadata.hasPendingWrites),
         });
         setMonthlyDispatches(data);
         setIsLoading(false);
       },
       (err) => {
+        if (subscriptionGenerationRef.current !== generation) return;
         console.error("Monthly dispatches error:", err);
         setIsLoading(false);
       }
@@ -293,6 +314,7 @@ const StatsViewComponent: React.FC<StatsViewProps> = ({
       monthStart,
       monthEnd,
       (data) => {
+        if (subscriptionGenerationRef.current !== generation) return;
         updateCachedMonth(currentMonth, { bounced: data });
         setMonthlyBounced(data);
       },
@@ -305,6 +327,7 @@ const StatsViewComponent: React.FC<StatsViewProps> = ({
       monthStart,
       monthEnd,
       (data) => {
+        if (subscriptionGenerationRef.current !== generation) return;
         updateCachedMonth(currentMonth, { attendance: data });
         setMonthlyAttendance(data);
       },
@@ -314,6 +337,9 @@ const StatsViewComponent: React.FC<StatsViewProps> = ({
     );
 
     return () => {
+      if (subscriptionGenerationRef.current === generation) {
+        subscriptionGenerationRef.current += 1;
+      }
       clearTimeout(safetyTimer);
       unsubDispatches();
       unsubBounced();

@@ -1,4 +1,10 @@
-import React, { useEffect, useState, useMemo, useDeferredValue } from "react";
+import React, {
+  useEffect,
+  useState,
+  useMemo,
+  useDeferredValue,
+  useSyncExternalStore,
+} from "react";
 import { format, parseISO } from "date-fns";
 import { ko } from "date-fns/locale";
 import {
@@ -40,6 +46,118 @@ import { EstablishmentAdditionalCollectForm } from "./EstablishmentAdditionalCol
 import { CollectionRoundBadges } from "./CollectionRoundBadges";
 import { SearchField } from "./SearchField";
 import { unpaidEstablishmentSearchBlob } from "../lib/unpaidSearch";
+
+interface AdditionalCollectionRequest {
+  dateKey: string;
+  estName: string;
+  totalRequested: number;
+  totalCollected: number;
+  records: DispatchRecord[];
+}
+
+let additionalCollectionRequest: AdditionalCollectionRequest | null = null;
+const additionalCollectionRequestListeners = new Set<() => void>();
+
+function setAdditionalCollectionRequest(
+  request: AdditionalCollectionRequest | null,
+) {
+  additionalCollectionRequest = request;
+  additionalCollectionRequestListeners.forEach((listener) => listener());
+}
+
+function subscribeAdditionalCollectionRequest(listener: () => void) {
+  additionalCollectionRequestListeners.add(listener);
+  return () => additionalCollectionRequestListeners.delete(listener);
+}
+
+function useAdditionalCollectionRequest() {
+  return useSyncExternalStore(
+    subscribeAdditionalCollectionRequest,
+    () => additionalCollectionRequest,
+    () => null,
+  );
+}
+
+function AdditionalCollectionModal({
+  onCollect,
+}: {
+  onCollect: (
+    request: AdditionalCollectionRequest,
+    method: PaymentMethod,
+    additionalAmount: number,
+    depositorName: string,
+    collectedDate: string,
+    collectedTime: string,
+  ) => Promise<void>;
+}) {
+  const request = useAdditionalCollectionRequest();
+  if (!request) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center p-3 sm:p-4"
+      data-html2canvas-ignore="true"
+      data-capture-ignore="true"
+    >
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={() => setAdditionalCollectionRequest(null)}
+        className="absolute inset-0 bg-stone-900/60 backdrop-blur-xs"
+      />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.96 }}
+        onClick={(event) => event.stopPropagation()}
+        className="relative z-10 w-full max-w-xl max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-3xl bg-white p-3 sm:p-4 shadow-2xl"
+      >
+        <div className="mb-3 flex items-center justify-between gap-3 px-1">
+          <div className="min-w-0">
+            <p className="truncate text-base font-black text-stone-900">
+              {request.estName}
+            </p>
+            <p className="text-xs font-bold text-stone-500">
+              {request.dateKey} 추가 수금/조정
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAdditionalCollectionRequest(null)}
+            className="shrink-0 rounded-xl bg-stone-100 p-2 text-stone-600 transition-colors hover:bg-stone-200 cursor-pointer"
+            aria-label="추가 수금/조정 창 닫기"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <EstablishmentAdditionalCollectForm
+          estName={request.estName}
+          draftKey={`${request.dateKey}_${request.estName}`}
+          originalTotal={request.totalRequested}
+          currentCollected={request.totalCollected}
+          onCollectAdditional={(
+            method,
+            additionalAmount,
+            depositorName,
+            collectedDate,
+            collectedTime,
+          ) =>
+            onCollect(
+              request,
+              method,
+              additionalAmount,
+              depositorName,
+              collectedDate,
+              collectedTime,
+            )
+          }
+          onCancel={() => setAdditionalCollectionRequest(null)}
+        />
+      </motion.div>
+    </div>
+  );
+}
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -258,6 +376,9 @@ interface UnpaidDetailViewProps {
     id: string,
     updates: Partial<DispatchRecord>,
   ) => Promise<void>;
+  onUpdateRecordsAtomically: (
+    updates: Array<{ id: string; updates: Partial<DispatchRecord> }>,
+  ) => Promise<void>;
   onEditRecord?: (record: DispatchRecord) => void;
   onViewDispatchRecord?: (record: DispatchRecord) => void;
   focusRecordIds?: string[] | null;
@@ -270,11 +391,19 @@ export function UnpaidDetailView({
   staff,
   selectedDate,
   onUpdateRecord,
+  onUpdateRecordsAtomically,
   onEditRecord,
   onViewDispatchRecord,
   focusRecordIds,
   onFocusRecordComplete,
 }: UnpaidDetailViewProps) {
+  useEffect(
+    () => () => {
+      setAdditionalCollectionRequest(null);
+    },
+    [],
+  );
+
   const [searchTerm, setSearchTerm] = useState("");
   const deferredSearchTerm = useDeferredValue(searchTerm);
   const [dateRenderLimit, setDateRenderLimit] = useState(8);
@@ -309,10 +438,6 @@ export function UnpaidDetailView({
     method: PaymentMethod;
   } | null>(null);
 
-  const [batchAdditionalCollecting, setBatchAdditionalCollecting] = useState<{
-    dateKey: string;
-    estName: string;
-  } | null>(null);
   const [establishmentHistoryModal, setEstablishmentHistoryModal] = useState<{
     estName: string;
   } | null>(null);
@@ -552,12 +677,6 @@ export function UnpaidDetailView({
   const activeBatchCollection = batchCollecting
     ? dateEstablishmentGroups[batchCollecting.dateKey]?.[
         batchCollecting.estName
-      ]
-    : null;
-
-  const activeAdditionalCollection = batchAdditionalCollecting
-    ? dateEstablishmentGroups[batchAdditionalCollecting.dateKey]?.[
-        batchAdditionalCollecting.estName
       ]
     : null;
 
@@ -1024,19 +1143,62 @@ export function UnpaidDetailView({
 
       if (error) {
         setAlertConfig({ message: `[${estName}] ${error}` });
-        return;
+        throw new Error(error);
       }
 
-      await Promise.all(
-        updates.map(({ id, updates: u }) => applyRecordUpdate(id, u)),
-      );
-      setBatchAdditionalCollecting(null);
+      await onUpdateRecordsAtomically(updates);
+      setAdditionalCollectionRequest(null);
     } catch (e) {
       console.error("추가 수금 처리 중 오류:", e);
       setAlertConfig({
         message: `추가 수금 처리 중 오류: ${getErrorMessage(e, "추가 수금 처리 중 오류가 발생했습니다.")}`,
       });
+      throw e;
     }
+  };
+
+  const handleAdditionalCollectRequest = async (
+    request: AdditionalCollectionRequest,
+    method: PaymentMethod,
+    additionalAmount: number,
+    depositorName: string,
+    collectedDate: string,
+    collectedTime: string,
+  ) => {
+    const latest =
+      dateEstablishmentGroups[request.dateKey]?.[request.estName] || null;
+    const requestedIds = request.records
+      .map((record) => record.id)
+      .filter(Boolean)
+      .sort()
+      .join("|");
+    const latestIds = (latest?.records || [])
+      .map((record) => record.id)
+      .filter(Boolean)
+      .sort()
+      .join("|");
+
+    if (
+      !latest ||
+      latest.totalRequested !== request.totalRequested ||
+      latest.totalCollected !== request.totalCollected ||
+      latestIds !== requestedIds
+    ) {
+      const message =
+        "열어 둔 동안 수금 내역이 변경되었습니다. 중복 저장을 막기 위해 창을 닫고 최신 금액으로 다시 열어 주세요.";
+      setAlertConfig({ message });
+      throw new Error(message);
+    }
+
+    await handleAdditionalCollect(
+      request.estName,
+      latest.records,
+      method,
+      additionalAmount,
+      depositorName,
+      collectedDate,
+      collectedTime,
+    );
   };
 
   // Establishment All Cancel
@@ -1778,9 +1940,12 @@ export function UnpaidDetailView({
                                   data-html2canvas-ignore="true"
                                   data-capture-ignore="true"
                                   onClick={() => {
-                                    setBatchAdditionalCollecting({
+                                    setAdditionalCollectionRequest({
                                       dateKey: date,
                                       estName: est.estName,
+                                      totalRequested: est.totalRequested,
+                                      totalCollected: est.totalCollected,
+                                      records: est.records,
                                     });
                                   }}
                                   className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
@@ -2561,10 +2726,15 @@ export function UnpaidDetailView({
                               <button
                                 type="button"
                                 onClick={() =>
-                                  setBatchAdditionalCollecting({
+                                  setAdditionalCollectionRequest({
                                     dateKey: historyDate,
                                     estName:
                                       establishmentHistoryModal.estName,
+                                    totalRequested:
+                                      establishment.totalRequested,
+                                    totalCollected:
+                                      establishment.totalCollected,
+                                    records: establishment.records,
                                   })
                                 }
                                 className="rounded-lg bg-amber-500 px-2 py-1 text-[11px] font-black text-white transition-all hover:bg-amber-600 active:scale-95 cursor-pointer"
@@ -2748,70 +2918,9 @@ export function UnpaidDetailView({
           </div>
         )}
 
-        {batchAdditionalCollecting && activeAdditionalCollection && (
-          <div
-            className="fixed inset-0 z-[90] flex items-center justify-center p-3 sm:p-4"
-            data-html2canvas-ignore="true"
-            data-capture-ignore="true"
-          >
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setBatchAdditionalCollecting(null)}
-              className="absolute inset-0 bg-stone-900/60 backdrop-blur-xs"
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.96 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.96 }}
-              onClick={(e) => e.stopPropagation()}
-              className="relative z-10 w-full max-w-xl max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-3xl bg-white p-3 sm:p-4 shadow-2xl"
-            >
-              <div className="mb-3 flex items-center justify-between gap-3 px-1">
-                <div className="min-w-0">
-                  <p className="truncate text-base font-black text-stone-900">
-                    {batchAdditionalCollecting.estName}
-                  </p>
-                  <p className="text-xs font-bold text-stone-500">
-                    {batchAdditionalCollecting.dateKey} 추가 수금/조정
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setBatchAdditionalCollecting(null)}
-                  className="shrink-0 rounded-xl bg-stone-100 p-2 text-stone-600 transition-colors hover:bg-stone-200 cursor-pointer"
-                  aria-label="추가 수금/조정 창 닫기"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              <EstablishmentAdditionalCollectForm
-                estName={batchAdditionalCollecting.estName}
-                originalTotal={activeAdditionalCollection.totalRequested}
-                currentCollected={activeAdditionalCollection.totalCollected}
-                onCollectAdditional={(
-                  method,
-                  additionalAmount,
-                  depositorName,
-                  collectedDate,
-                  collectedTime,
-                ) => {
-                  handleAdditionalCollect(
-                    batchAdditionalCollecting.estName,
-                    activeAdditionalCollection.records,
-                    method,
-                    additionalAmount,
-                    depositorName,
-                    collectedDate,
-                    collectedTime,
-                  );
-                }}
-                onCancel={() => setBatchAdditionalCollecting(null)}
-              />
-            </motion.div>
-          </div>
-        )}
+        <AdditionalCollectionModal
+          onCollect={handleAdditionalCollectRequest}
+        />
 
         {confirmConfig && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">

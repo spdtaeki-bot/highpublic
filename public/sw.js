@@ -1,9 +1,10 @@
-const CACHE_NAME = 'office-v3-assets';
+const CACHE_NAME = 'office-v4-assets';
 const MAX_HASHED_ASSETS = 48;
 const MAX_QUERY_RESPONSES = 4;
 
 self.addEventListener('install', (e) => {
-  self.skipWaiting();
+  // 열린 입력 화면을 새 버전이 가로채지 않도록 대기 상태를 유지한다.
+  // 새 워커는 사용자가 모든 기존 탭을 닫은 뒤 자연스럽게 활성화된다.
 });
 
 self.addEventListener('activate', (e) => {
@@ -19,7 +20,6 @@ self.addEventListener('activate', (e) => {
     }).then(async () => {
       const cache = await caches.open(CACHE_NAME);
       await pruneCachedAssets(cache);
-      await self.clients.claim();
     })
   );
 });

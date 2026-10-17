@@ -8,6 +8,7 @@ import React, {
   ErrorInfo,
   useDeferredValue,
   useCallback,
+  useSyncExternalStore,
   lazy,
   Suspense,
 } from "react";
@@ -85,6 +86,7 @@ import {
 import {
   addDispatch,
   updateDispatch,
+  updateDispatchesAtomically,
   subscribeToDispatches,
   subscribeToAllUnpaidDispatches,
   subscribeToUnpaidStaffDispatches,
@@ -685,6 +687,13 @@ export default function App() {
     const stored = localStorage.getItem("office_detail_modal");
     return stored ? JSON.parse(stored) : { type: "revenue", isOpen: false };
   });
+  const closeDetailModal = useCallback(() => {
+    setDetailModal((previous) => ({ ...previous, isOpen: false }));
+  }, []);
+  const pastUnpaidStaffRecords = useMemo(
+    () => unpaidStaffRecords.filter((record) => record.date < selectedDate),
+    [selectedDate, unpaidStaffRecords],
+  );
 
   const [statusModal, setStatusModal] = useState<{
     type: "TOTAL" | "WORKING" | "WAITING" | "FINISHED" | "OFF_DUTY";
@@ -4438,6 +4447,7 @@ export default function App() {
                         onUpdateRecord={async (id, updates) => {
                           await updateDispatch(id, updates as any);
                         }}
+                        onUpdateRecordsAtomically={updateDispatchesAtomically}
                         onEditRecord={(record) => setEditingRecord(record)}
                         onViewDispatchRecord={handleViewDispatchRecord}
                         focusRecordIds={pendingUnpaidRecordIds}
@@ -4642,14 +4652,9 @@ export default function App() {
                     records={
                       detailModal.type === "unpaid" ? allUnpaidRecords : records
                     }
-                    unpaidStaffRecords={unpaidStaffRecords.filter(
-                      (r) => r.date < selectedDate,
-                    )}
+                    unpaidStaffRecords={pastUnpaidStaffRecords}
                     allUnpaidRecords={allUnpaidRecords}
-                    onClose={() =>
-                      setDetailModal((prev) => ({ ...prev, isOpen: false }))
-                    }
-                    currentTime={currentTime}
+                    onClose={closeDetailModal}
                     staff={staff}
                     checkInTimes={checkInTimes}
                     selectedDate={selectedDate}
@@ -7999,13 +8004,67 @@ import { BatchCollectForm } from "./components/BatchCollectForm";
 import { EstablishmentAdditionalCollectForm } from "./components/EstablishmentAdditionalCollectForm";
 import { FloatingStaffSearchBar } from "./components/FloatingStaffSearchBar";
 
-function DetailBreakdownModal({
+let activeAdditionalCollectKey: string | null = null;
+const additionalCollectListeners = new Set<() => void>();
+
+function setActiveAdditionalCollectKey(key: string | null) {
+  if (activeAdditionalCollectKey === key) return;
+  activeAdditionalCollectKey = key;
+  additionalCollectListeners.forEach((listener) => listener());
+}
+
+function subscribeToActiveAdditionalCollect(listener: () => void) {
+  additionalCollectListeners.add(listener);
+  return () => additionalCollectListeners.delete(listener);
+}
+
+function useActiveAdditionalCollectKey() {
+  return useSyncExternalStore(
+    subscribeToActiveAdditionalCollect,
+    () => activeAdditionalCollectKey,
+    () => null,
+  );
+}
+
+function AdditionalCollectToggle({ recordKey }: { recordKey: string }) {
+  const activeKey = useActiveAdditionalCollectKey();
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        setActiveAdditionalCollectKey(
+          activeKey === recordKey ? null : recordKey,
+        )
+      }
+      className="px-2 py-1.5 bg-amber-500 text-white rounded-xl text-[9px] font-black shadow-sm hover:bg-amber-600 transition-all active:scale-95 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
+    >
+      ➕ 추가수금/조정
+    </button>
+  );
+}
+
+function AdditionalCollectPanel({
+  recordKey,
+  children,
+}: {
+  recordKey: string;
+  children: ReactNode;
+}) {
+  const activeKey = useActiveAdditionalCollectKey();
+  if (activeKey !== recordKey) return null;
+  return (
+    <div className="px-4 py-2 border-b border-amber-200 bg-amber-50/60">
+      {children}
+    </div>
+  );
+}
+
+const DetailBreakdownModal = React.memo(function DetailBreakdownModal({
   type,
   records,
   unpaidStaffRecords,
   allUnpaidRecords,
   onClose,
-  currentTime,
   staff,
   checkInTimes,
   selectedDate,
@@ -8018,7 +8077,6 @@ function DetailBreakdownModal({
   unpaidStaffRecords: DispatchRecord[];
   allUnpaidRecords: DispatchRecord[];
   onClose: () => void;
-  currentTime: Date;
   staff: Staff[];
   checkInTimes: Record<string, any>;
   selectedDate: string;
@@ -8076,10 +8134,18 @@ function DetailBreakdownModal({
     useState(false);
   const [hasLoadedPaidStaffHistory, setHasLoadedPaidStaffHistory] =
     useState(false);
-  const [batchAdditionalCollectingKey, setBatchAdditionalCollectingKey] = useState<string | null>(null);
-
   const [localRecords, setLocalRecords] = useState<DispatchRecord[]>([]);
+  const pendingLocalUpdatesRef = useRef(
+    new Map<string, Partial<DispatchRecord>>(),
+  );
   const customTimeInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(
+    () => () => {
+      setActiveAdditionalCollectKey(null);
+    },
+    [],
+  );
 
   useEffect(() => {
     setHistoryDateLimit(12);
@@ -8279,6 +8345,7 @@ function DetailBreakdownModal({
 
           newMap.set(r.id, {
             ...r,
+            ...pendingLocalUpdatesRef.current.get(r.id),
             wasUnpaid,
             wasStaffUnpaid,
           } as any);
@@ -8466,12 +8533,16 @@ function DetailBreakdownModal({
     collectedDateStr?: string,
     collectedTimeStr?: string,
   ) => {
+    const optimisticPrevious = new Map<string, DispatchRecord>();
     try {
       if (!targetRecords || targetRecords.length === 0) return;
 
       const currentRecords = targetRecords.map((r) => {
         const found = localRecords.find((loc) => loc.id === r.id);
         return found || r;
+      });
+      currentRecords.forEach((record) => {
+        if (record.id) optimisticPrevious.set(record.id, record);
       });
 
       const now = new Date();
@@ -8535,21 +8606,42 @@ function DetailBreakdownModal({
 
       if (error) {
         setAlertConfig({ message: error });
-        return;
+        throw new Error(error);
       }
 
-      await Promise.all(
-        updates.map(async ({ id, updates: u }) => {
-          await updateDispatch(id, u as any);
-          updateLocalRecord(id, u as any);
+      updates.forEach(({ id, updates: optimisticUpdates }) => {
+        pendingLocalUpdatesRef.current.set(id, optimisticUpdates);
+      });
+      setLocalRecords((previous) =>
+        previous.map((record) => {
+          const optimisticUpdates = record.id
+            ? pendingLocalUpdatesRef.current.get(record.id)
+            : undefined;
+          return optimisticUpdates
+            ? { ...record, ...optimisticUpdates }
+            : record;
         }),
       );
-      setBatchAdditionalCollectingKey(null);
+
+      await updateDispatchesAtomically(updates);
+      updates.forEach(({ id }) => pendingLocalUpdatesRef.current.delete(id));
+      setActiveAdditionalCollectKey(null);
     } catch (e) {
+      optimisticPrevious.forEach((_, id) => {
+        pendingLocalUpdatesRef.current.delete(id);
+      });
+      setLocalRecords((previous) =>
+        previous.map((record) =>
+          record.id && optimisticPrevious.has(record.id)
+            ? optimisticPrevious.get(record.id)!
+            : record,
+        ),
+      );
       console.error("업체 추가 수금 처리 중 오류:", e);
       setAlertConfig({
         message: `추가 수금 처리 중 오류: ${getErrorMessage(e, "추가 수금 처리 중 오류가 발생했습니다.")}`,
       });
+      throw e;
     }
   };
 
@@ -9391,18 +9483,9 @@ function DetailBreakdownModal({
                                       </button>
                                     </>
                                   )}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const key = `${date}_${estName}`;
-                                      setBatchAdditionalCollectingKey(
-                                        batchAdditionalCollectingKey === key ? null : key,
-                                      );
-                                    }}
-                                    className="px-2 py-1.5 bg-amber-500 text-white rounded-xl text-[9px] font-black shadow-sm hover:bg-amber-600 transition-all active:scale-95 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
-                                  >
-                                    ➕ 추가수금/조정
-                                  </button>
+                                  <AdditionalCollectToggle
+                                    recordKey={`${date}_${estName}`}
+                                  />
                                 </>
                               )}
                               {(hasAnyCollection ||
@@ -9558,10 +9641,10 @@ function DetailBreakdownModal({
                             />
                           </div>
                         )}
-                      {batchAdditionalCollectingKey === `${date}_${estName}` && (
-                        <div className="px-4 py-2 border-b border-amber-200 bg-amber-50/60">
+                      <AdditionalCollectPanel recordKey={`${date}_${estName}`}>
                           <EstablishmentAdditionalCollectForm
                             estName={estName}
+                            draftKey={`${date}_${estName}`}
                             originalTotal={estData.records.reduce(
                               (sum, r) => sum + r.totalAmount,
                               0,
@@ -9584,7 +9667,7 @@ function DetailBreakdownModal({
                               depositorName,
                               collectedDate,
                               collectedTime,
-                            ) => {
+                            ) =>
                               handleEstablishmentAdditionalCollect(
                                 estData.records,
                                 method,
@@ -9592,14 +9675,13 @@ function DetailBreakdownModal({
                                 depositorName,
                                 collectedDate,
                                 collectedTime,
-                              );
-                            }}
+                              )
+                            }
                             onCancel={() =>
-                              setBatchAdditionalCollectingKey(null)
+                              setActiveAdditionalCollectKey(null)
                             }
                           />
-                        </div>
-                      )}
+                      </AdditionalCollectPanel>
                       <div className="p-3 space-y-2">
                         {estData.records.map((r) => (
                           <div
@@ -10552,7 +10634,7 @@ function DetailBreakdownModal({
       </motion.div>
     </div>
   );
-}
+});
 
 function StatCard({
   title,
