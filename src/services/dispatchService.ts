@@ -952,6 +952,24 @@ export const updateDispatch = async (id: string, data: Partial<DispatchRecord>) 
   }
 };
 
+export const updateDispatchesAtomically = async (
+  updates: Array<{ id: string; updates: Partial<DispatchRecord> }>,
+) => {
+  if (updates.length === 0) return;
+  try {
+    const batch = writeBatch(db);
+    updates.forEach(({ id, updates: patch }) => {
+      batch.update(
+        doc(db, COLLECTION_NAME, id),
+        sanitizeForFirestore(patch),
+      );
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, COLLECTION_NAME);
+  }
+};
+
 /**
  * 소속 일괄지급 전용 처리.
  * 실행 시점의 서버 데이터를 트랜잭션으로 다시 읽고 미지급 기록만 갱신한다.
@@ -1143,7 +1161,10 @@ export const subscribeToBouncedRecords = (
 export const subscribeToDispatchesByDateRange = (
   startDate: string,
   endDate: string,
-  callback: (records: DispatchRecord[]) => void,
+  callback: (
+    records: DispatchRecord[],
+    metadata: { fromCache: boolean; hasPendingWrites: boolean },
+  ) => void,
   onError?: (error: unknown) => void
 ) => {
   const q = query(
@@ -1155,11 +1176,15 @@ export const subscribeToDispatchesByDateRange = (
 
   return onSnapshot(
     q,
+    { includeMetadataChanges: true },
     (snapshot) => {
       const records = snapshot.docs.map((doc) =>
         normalizeDispatchRecord(doc.id, doc.data() as Record<string, any>)
       );
-      callback(records);
+      callback(records, {
+        fromCache: snapshot.metadata.fromCache,
+        hasPendingWrites: snapshot.metadata.hasPendingWrites,
+      });
     },
     (error) => {
       if (onError) onError(error);

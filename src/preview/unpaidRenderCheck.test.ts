@@ -27,6 +27,7 @@ test("미수 화면은 전체 금액을 유지하고 날짜 카드는 8개만 �
       staff: [],
       selectedDate: SAMPLE_DATE,
       onUpdateRecord: async () => {},
+      onUpdateRecordsAtomically: async () => {},
     }),
   );
 

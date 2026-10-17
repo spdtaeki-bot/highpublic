@@ -1,15 +1,26 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
 import { PaymentMethod } from "../types";
 
+interface AdditionalCollectDraft {
+  mode: "ADD" | "SET";
+  amountStr: string;
+  method: PaymentMethod;
+  depositorName: string;
+  collectedDate: string;
+  collectedTime: string;
+}
+
 export function EstablishmentAdditionalCollectForm({
   estName,
+  draftKey,
   originalTotal,
   currentCollected,
   onCollectAdditional,
   onCancel,
 }: {
   estName: string;
+  draftKey: string;
   originalTotal: number;
   currentCollected: number;
   onCollectAdditional: (
@@ -18,19 +29,73 @@ export function EstablishmentAdditionalCollectForm({
     depositorName: string,
     collectedDate: string,
     collectedTime: string,
-  ) => void;
+  ) => Promise<void> | void;
   onCancel: () => void;
 }) {
-  const [mode, setMode] = useState<"ADD" | "SET">("ADD");
-  const [amountStr, setAmountStr] = useState<string>("");
-  const [method, setMethod] = useState<PaymentMethod>("TRANSFER");
-  const [depositorName, setDepositorName] = useState<string>("");
-  const [collectedDate, setCollectedDate] = useState<string>(
-    format(new Date(), "MMdd"),
+  const storageKey = `office_additional_collect_draft:${draftKey}`;
+  const initialDraft = useRef<AdditionalCollectDraft | null>(null);
+  if (initialDraft.current === null) {
+    try {
+      initialDraft.current = JSON.parse(
+        sessionStorage.getItem(storageKey) || "null",
+      ) as AdditionalCollectDraft | null;
+    } catch {
+      initialDraft.current = null;
+    }
+  }
+  const [mode, setMode] = useState<"ADD" | "SET">(
+    initialDraft.current?.mode || "ADD",
   );
-  const [collectedTime, setCollectedTime] = useState<string>(
-    format(new Date(), "HHmm"),
+  const [amountStr, setAmountStr] = useState(initialDraft.current?.amountStr || "");
+  const [method, setMethod] = useState<PaymentMethod>(
+    initialDraft.current?.method || "TRANSFER",
   );
+  const [depositorName, setDepositorName] = useState(
+    initialDraft.current?.depositorName || "",
+  );
+  const [collectedDate, setCollectedDate] = useState(
+    initialDraft.current?.collectedDate || format(new Date(), "MMdd"),
+  );
+  const [collectedTime, setCollectedTime] = useState(
+    initialDraft.current?.collectedTime || format(new Date(), "HHmm"),
+  );
+  const [isSaving, setIsSaving] = useState(false);
+  const savingRef = useRef(false);
+  const isComposingRef = useRef(false);
+
+  useEffect(() => {
+    const draft: AdditionalCollectDraft = {
+      mode,
+      amountStr,
+      method,
+      depositorName,
+      collectedDate,
+      collectedTime,
+    };
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(draft));
+    } catch {
+      // 저장소가 막혀도 현재 React 상태의 입력은 계속 유지한다.
+    }
+  }, [
+    amountStr,
+    collectedDate,
+    collectedTime,
+    depositorName,
+    method,
+    mode,
+    storageKey,
+  ]);
+
+  useEffect(() => {
+    const preventAccidentalReload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", preventAccidentalReload);
+    return () =>
+      window.removeEventListener("beforeunload", preventAccidentalReload);
+  }, []);
 
   const shortage = Math.max(0, originalTotal - currentCollected);
   const inputNum = amountStr ? parseInt(amountStr.replace(/,/g, ""), 10) : 0;
@@ -39,8 +104,36 @@ export function EstablishmentAdditionalCollectForm({
   const newTotalCollected = currentCollected + additionalAmount;
   const newShortage = originalTotal - newTotalCollected;
 
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (savingRef.current || isComposingRef.current) return;
+    if (additionalAmount === 0 && mode === "ADD") {
+      alert("추가 수금 금액을 입력해주세요.");
+      return;
+    }
+
+    savingRef.current = true;
+    setIsSaving(true);
+    try {
+      await onCollectAdditional(
+        method,
+        additionalAmount,
+        depositorName,
+        collectedDate,
+        collectedTime,
+      );
+      sessionStorage.removeItem(storageKey);
+    } catch {
+      // 상위 핸들러가 오류 안내와 낙관적 상태 복구를 담당한다.
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
+    }
+  };
+
   return (
-    <div
+    <form
+      onSubmit={handleSubmit}
       className="p-3.5 bg-amber-50 rounded-2xl border-2 border-amber-400 shadow-lg my-2 space-y-3 animate-in fade-in slide-in-from-top-2 w-full max-w-full overflow-hidden box-border"
       onClick={(e) => e.stopPropagation()}
     >
@@ -161,6 +254,13 @@ export function EstablishmentAdditionalCollectForm({
               type="text"
               value={depositorName}
               onChange={(e) => setDepositorName(e.target.value)}
+            onCompositionStart={() => {
+              isComposingRef.current = true;
+            }}
+            onCompositionEnd={(e) => {
+              isComposingRef.current = false;
+              setDepositorName(e.currentTarget.value);
+            }}
               className="w-full px-2.5 py-2 bg-white border border-stone-200 rounded-xl text-[13px] font-bold text-stone-900 focus:ring-2 focus:ring-amber-700 outline-none transition-all placeholder:text-stone-300 placeholder:font-normal"
               placeholder="입금자명 입력 (선택)"
             />
@@ -257,32 +357,24 @@ export function EstablishmentAdditionalCollectForm({
 
       <div className="flex gap-2 pt-1">
         <button
-          type="button"
-          onClick={() => {
-            if (additionalAmount === 0 && mode === "ADD") {
-              alert("추가 수금 금액을 입력해주세요.");
-              return;
-            }
-            onCollectAdditional(
-              method,
-              additionalAmount,
-              depositorName,
-              collectedDate,
-              collectedTime,
-            );
-          }}
-          className="flex-1 py-2 bg-amber-900 text-white rounded-xl text-xs font-black hover:bg-amber-950 transition-all shadow-md active:scale-95 cursor-pointer"
+          type="submit"
+          disabled={isSaving}
+          className="flex-1 py-2 bg-amber-900 text-white rounded-xl text-xs font-black hover:bg-amber-950 transition-all shadow-md active:scale-95 cursor-pointer disabled:opacity-50 disabled:active:scale-100"
         >
-          추가 수금 및 자동 항목 조정 적용
+          {isSaving ? "저장 중..." : "추가 수금 및 자동 항목 조정 적용"}
         </button>
         <button
           type="button"
-          onClick={onCancel}
+          onClick={() => {
+            sessionStorage.removeItem(storageKey);
+            onCancel();
+          }}
+          disabled={isSaving}
           className="px-4 py-2 bg-white text-stone-600 rounded-xl text-xs font-black border border-stone-200 hover:bg-stone-100 cursor-pointer"
         >
           취소
         </button>
       </div>
-    </div>
+    </form>
   );
 }

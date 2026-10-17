@@ -224,6 +224,21 @@ export const updateDispatch = async (id: string, data: Partial<DispatchRecord>) 
   emitAll();
 };
 
+export const updateDispatchesAtomically = async (
+  updates: Array<{ id: string; updates: Partial<DispatchRecord> }>,
+) => {
+  updates.forEach(({ id, updates: patch }) => {
+    const record = records.find((item) => item.id === id);
+    if (record) {
+      applyPatch(
+        record as unknown as Record<string, unknown>,
+        patch as Record<string, unknown>,
+      );
+    }
+  });
+  emitAll();
+};
+
 export const payUnpaidDispatches = async (
   ids: string[],
   method: "CASH" | "TRANSFER",
