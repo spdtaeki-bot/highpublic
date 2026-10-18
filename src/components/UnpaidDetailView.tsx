@@ -3,6 +3,7 @@ import React, {
   useState,
   useMemo,
   useDeferredValue,
+  useRef,
   useSyncExternalStore,
 } from "react";
 import { format, parseISO } from "date-fns";
@@ -46,6 +47,11 @@ import { EstablishmentAdditionalCollectForm } from "./EstablishmentAdditionalCol
 import { CollectionRoundBadges } from "./CollectionRoundBadges";
 import { SearchField } from "./SearchField";
 import { unpaidEstablishmentSearchBlob } from "../lib/unpaidSearch";
+import {
+  collectionPatchVisible,
+  overlayRecordPatches,
+  type RecordPatch,
+} from "../lib/optimisticCollect";
 
 interface AdditionalCollectionRequest {
   dateKey: string;
@@ -132,6 +138,7 @@ function AdditionalCollectionModal({
           </button>
         </div>
         <EstablishmentAdditionalCollectForm
+          key={`${request.dateKey}_${request.estName}`}
           estName={request.estName}
           draftKey={`${request.dateKey}_${request.estName}`}
           originalTotal={request.totalRequested}
@@ -450,6 +457,8 @@ export function UnpaidDetailView({
   } | null>(null);
   const [isSavingEstablishmentMemo, setIsSavingEstablishmentMemo] =
     useState(false);
+  const [collectPatches, setCollectPatches] = useState<RecordPatch[]>([]);
+  const additionalCollectLockRef = useRef(false);
 
   // Screenshot Capture State
   const [isCapturing, setIsCapturing] = useState<string | null>(null);
@@ -541,8 +550,24 @@ export function UnpaidDetailView({
       }
     });
 
-    return Array.from(map.values());
-  }, [allUnpaidRecords, records]);
+    const merged = Array.from(map.values());
+    return collectPatches.length > 0
+      ? overlayRecordPatches(merged, collectPatches)
+      : merged;
+  }, [allUnpaidRecords, records, collectPatches]);
+
+  useEffect(() => {
+    if (collectPatches.length === 0) return;
+    const source = new Map<string, DispatchRecord>();
+    for (const record of [...allUnpaidRecords, ...records]) {
+      if (record.id) source.set(record.id, record);
+    }
+    const pending = collectPatches.filter((patch) => {
+      const current = source.get(patch.id);
+      return !current || !collectionPatchVisible(current, patch.updates);
+    });
+    if (pending.length !== collectPatches.length) setCollectPatches(pending);
+  }, [allUnpaidRecords, records, collectPatches]);
 
   useEffect(() => {
     if (!focusRecordIds || focusRecordIds.length === 0) return;
@@ -1102,6 +1127,13 @@ export function UnpaidDetailView({
     dateStr: string = "",
     timeStr: string = "",
   ) => {
+    if (additionalCollectLockRef.current) {
+      const message = "이미 저장 중입니다. 끝난 뒤에 다시 시도해 주세요.";
+      setAlertConfig({ message });
+      throw new Error(message);
+    }
+    additionalCollectLockRef.current = true;
+    let appliedPatchIds: string[] = [];
     try {
       const currentRecords = recordsToUpdate.map((r) => {
         const found = combinedRecords.find((x) => x.id === r.id);
@@ -1146,14 +1178,26 @@ export function UnpaidDetailView({
         throw new Error(error);
       }
 
-      await onUpdateRecordsAtomically(updates);
+      appliedPatchIds = updates.map((patch) => patch.id);
+      setCollectPatches((current) => {
+        const merged = new Map(current.map((patch) => [patch.id, patch]));
+        for (const patch of updates) merged.set(patch.id, patch);
+        return Array.from(merged.values());
+      });
       setAdditionalCollectionRequest(null);
+      await onUpdateRecordsAtomically(updates);
     } catch (e) {
+      if (appliedPatchIds.length > 0) {
+        const ids = new Set(appliedPatchIds);
+        setCollectPatches((current) => current.filter((patch) => !ids.has(patch.id)));
+      }
       console.error("추가 수금 처리 중 오류:", e);
       setAlertConfig({
         message: `추가 수금 처리 중 오류: ${getErrorMessage(e, "추가 수금 처리 중 오류가 발생했습니다.")}`,
       });
       throw e;
+    } finally {
+      additionalCollectLockRef.current = false;
     }
   };
 

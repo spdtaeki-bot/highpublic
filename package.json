@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/lib/unpaidSearch.test.ts src/lib/searchPaste.test.ts src/lib/statsSnapshot.test.ts src/preview/unpaidRenderCheck.test.ts",
+    "test": "tsx --test src/lib/unpaidSearch.test.ts src/lib/searchPaste.test.ts src/lib/statsSnapshot.test.ts src/lib/collectInputSession.test.ts src/lib/optimisticCollect.test.ts src/components/EstablishmentAdditionalCollectForm.test.tsx src/preview/unpaidRenderCheck.test.ts",
     "build:speed-preview": "vite build --config vite.preview.config.ts && cp speed-preview-site/speed-preview.html speed-preview-site/index.html"
   },
   "dependencies": {
@@ -38,6 +38,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.21",
+    "happy-dom": "^21.0.3",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
