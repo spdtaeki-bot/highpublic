@@ -123,6 +123,7 @@ import {
   readAllOffCaptures,
   safeSetItem,
 } from "./lib/siteStorage";
+import { collectionPatchVisible } from "./lib/optimisticCollect";
 import { CollectionRoundBadges } from "./components/CollectionRoundBadges";
 import { SearchField } from "./components/SearchField";
 import { ChoiceSetupModal } from "./components/ChoiceSetupModal";
@@ -8138,6 +8139,7 @@ const DetailBreakdownModal = React.memo(function DetailBreakdownModal({
   const pendingLocalUpdatesRef = useRef(
     new Map<string, Partial<DispatchRecord>>(),
   );
+  const additionalCollectLockRef = useRef(false);
   const customTimeInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(
@@ -8343,9 +8345,14 @@ const DetailBreakdownModal = React.memo(function DetailBreakdownModal({
           const wasStaffUnpaid =
             r.isStaffPaid === false || existing?.wasStaffUnpaid;
 
+          const pending = pendingLocalUpdatesRef.current.get(r.id);
+          const pendingVisible = pending
+            ? collectionPatchVisible(r, pending)
+            : false;
+          if (pending && pendingVisible) pendingLocalUpdatesRef.current.delete(r.id);
           newMap.set(r.id, {
             ...r,
-            ...pendingLocalUpdatesRef.current.get(r.id),
+            ...(pending && !pendingVisible ? pending : {}),
             wasUnpaid,
             wasStaffUnpaid,
           } as any);
@@ -8533,7 +8540,13 @@ const DetailBreakdownModal = React.memo(function DetailBreakdownModal({
     collectedDateStr?: string,
     collectedTimeStr?: string,
   ) => {
+    if (additionalCollectLockRef.current) {
+      const message = "이미 저장 중입니다. 끝난 뒤에 다시 시도해 주세요.";
+      setAlertConfig({ message });
+      throw new Error(message);
+    }
     const optimisticPrevious = new Map<string, DispatchRecord>();
+    let appliedOptimistic = false;
     try {
       if (!targetRecords || targetRecords.length === 0) return;
 
@@ -8609,6 +8622,8 @@ const DetailBreakdownModal = React.memo(function DetailBreakdownModal({
         throw new Error(error);
       }
 
+      additionalCollectLockRef.current = true;
+      appliedOptimistic = true;
       updates.forEach(({ id, updates: optimisticUpdates }) => {
         pendingLocalUpdatesRef.current.set(id, optimisticUpdates);
       });
@@ -8622,21 +8637,26 @@ const DetailBreakdownModal = React.memo(function DetailBreakdownModal({
             : record;
         }),
       );
-
-      await updateDispatchesAtomically(updates);
-      updates.forEach(({ id }) => pendingLocalUpdatesRef.current.delete(id));
       setActiveAdditionalCollectKey(null);
+
+      try {
+        await updateDispatchesAtomically(updates);
+      } finally {
+        additionalCollectLockRef.current = false;
+      }
     } catch (e) {
-      optimisticPrevious.forEach((_, id) => {
-        pendingLocalUpdatesRef.current.delete(id);
-      });
-      setLocalRecords((previous) =>
-        previous.map((record) =>
-          record.id && optimisticPrevious.has(record.id)
-            ? optimisticPrevious.get(record.id)!
-            : record,
-        ),
-      );
+      if (appliedOptimistic) {
+        optimisticPrevious.forEach((_, id) => {
+          pendingLocalUpdatesRef.current.delete(id);
+        });
+        setLocalRecords((previous) =>
+          previous.map((record) =>
+            record.id && optimisticPrevious.has(record.id)
+              ? optimisticPrevious.get(record.id)!
+              : record,
+          ),
+        );
+      }
       console.error("업체 추가 수금 처리 중 오류:", e);
       setAlertConfig({
         message: `추가 수금 처리 중 오류: ${getErrorMessage(e, "추가 수금 처리 중 오류가 발생했습니다.")}`,
@@ -9643,6 +9663,7 @@ const DetailBreakdownModal = React.memo(function DetailBreakdownModal({
                         )}
                       <AdditionalCollectPanel recordKey={`${date}_${estName}`}>
                           <EstablishmentAdditionalCollectForm
+                            key={`${date}_${estName}`}
                             estName={estName}
                             draftKey={`${date}_${estName}`}
                             originalTotal={estData.records.reduce(
