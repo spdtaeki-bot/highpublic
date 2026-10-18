@@ -124,6 +124,7 @@ import {
   safeSetItem,
 } from "./lib/siteStorage";
 import { collectionPatchVisible } from "./lib/optimisticCollect";
+import { deferWhileCollectTyping } from "./lib/collectTypingGate";
 import { CollectionRoundBadges } from "./components/CollectionRoundBadges";
 import { SearchField } from "./components/SearchField";
 import { ChoiceSetupModal } from "./components/ChoiceSetupModal";
@@ -1899,10 +1900,12 @@ export default function App() {
       const unsubDispatches = subscribeToDispatches(
         selectedDate,
         (data) => {
-          setRecords(data);
-          setLoading(false);
-          setInitErrorKind(null);
-          setInitError(null);
+          deferWhileCollectTyping("records", () => {
+            setRecords(data);
+            setLoading(false);
+            setInitErrorKind(null);
+            setInitError(null);
+          });
         },
         (err) => {
           setLoading(false);
@@ -1912,12 +1915,14 @@ export default function App() {
       const unsubAttendance = subscribeToAttendance(
         selectedDate,
         (data) => {
-          setWorkingStaffIds(data.staffIds);
-          setOffStaffIds(data.offStaffIds);
-          setCheckInTimes(data.checkInTimes || {});
-          setOffTimes(data.offTimes || {});
-          setRawManualDailyProfits(data.manualDailyProfits || {});
-          setRawActiveChoices(data.activeChoices || {});
+          deferWhileCollectTyping("attendance", () => {
+            setWorkingStaffIds(data.staffIds);
+            setOffStaffIds(data.offStaffIds);
+            setCheckInTimes(data.checkInTimes || {});
+            setOffTimes(data.offTimes || {});
+            setRawManualDailyProfits(data.manualDailyProfits || {});
+            setRawActiveChoices(data.activeChoices || {});
+          });
         },
         (err) => {
           handleSubscriptionError(err);
@@ -1926,7 +1931,7 @@ export default function App() {
       const unsubBounced = subscribeToBouncedRecords(
         selectedDate,
         (data) => {
-          setBouncedRecords(data);
+          deferWhileCollectTyping("bounced", () => setBouncedRecords(data));
         },
         (err) => {
           handleSubscriptionError(err);
@@ -1947,7 +1952,9 @@ export default function App() {
         attendanceRangeStart,
         sunday,
         (data) => {
-          setWeeklyAttendanceData(data);
+          deferWhileCollectTyping("weekly-attendance", () =>
+            setWeeklyAttendanceData(data),
+          );
         },
         (err) => {
           handleSubscriptionError(err);
@@ -1966,7 +1973,7 @@ export default function App() {
     if (isAuthenticated) {
       const unsubAllUnpaid = subscribeToAllUnpaidDispatches(
         (data) => {
-          setAllUnpaidRecords(data);
+          deferWhileCollectTyping("all-unpaid", () => setAllUnpaidRecords(data));
         },
         (err) => {
           handleSubscriptionError(err);
@@ -1974,7 +1981,9 @@ export default function App() {
       );
       const unsubUnpaidStaff = subscribeToUnpaidStaffDispatches(
         (data) => {
-          setUnpaidStaffRecords(data);
+          deferWhileCollectTyping("unpaid-staff", () =>
+            setUnpaidStaffRecords(data),
+          );
         },
         (err) => {
           handleSubscriptionError(err);
@@ -1982,7 +1991,7 @@ export default function App() {
       );
       const unsubStaff = subscribeToStaff(
         (data) => {
-          setStaff(data);
+          deferWhileCollectTyping("staff", () => setStaff(data));
         },
         (err) => {
           handleSubscriptionError(err);
@@ -1990,7 +1999,7 @@ export default function App() {
       );
       const unsubEstablishments = subscribeToEstablishments(
         (data) => {
-          setEstablishments(data);
+          deferWhileCollectTyping("establishments", () => setEstablishments(data));
         },
         (err) => {
           handleSubscriptionError(err);

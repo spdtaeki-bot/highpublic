@@ -3,13 +3,16 @@ import { format } from "date-fns";
 import { PaymentMethod } from "../types";
 import {
   additionalCollectShortage,
-  commitDepositorComposition,
   createCollectInputSession,
   decideCollectFieldChange,
   readAdditionalCollectDraft,
   type CollectInputField,
   type CollectInputSession,
 } from "../lib/collectInputSession";
+import {
+  markCollectInputActive,
+  markCollectInputIdle,
+} from "../lib/collectTypingGate";
 
 type CollectValues = {
   mode: "ADD" | "SET";
@@ -99,6 +102,7 @@ const BufferedCollectInput = React.memo(function BufferedCollectInput({
       placeholder={placeholder}
       className={className}
       onFocus={(event) => {
+        markCollectInputActive();
         if (field === "depositor") return;
         if (bridge.current.session.composingField) return;
         try {
@@ -108,9 +112,16 @@ const BufferedCollectInput = React.memo(function BufferedCollectInput({
         }
       }}
       onKeyDown={(event) => {
+        markCollectInputActive();
         if (event.key === "Tab") bridge.current.session.leavingField = field;
+        // 조합 직후 한 프레임 동안 걸린 봉인은 날짜가 '7'로 줄어드는 것만 막는다.
+        // 숫자를 직접 누르면 그 봉인을 바로 풀어서 '1931'의 첫 자리가 되돌아가지 않는다.
+        if (field !== "depositor" && /^[0-9]$/.test(event.key)) {
+          bridge.current.session.sealNumericCollapse = false;
+        }
       }}
       onCompositionStart={(event) => {
+        markCollectInputActive();
         const session = bridge.current.session;
         session.composingField = field;
         const start = event.currentTarget.selectionStart ?? event.currentTarget.value.length;
@@ -120,22 +131,23 @@ const BufferedCollectInput = React.memo(function BufferedCollectInput({
         const element = event.currentTarget;
         const session = bridge.current.session;
         if (field === "depositor") {
-          element.value = commitDepositorComposition({
-            base: bridge.current.bases[field] ?? "",
-            compositionData: event.data ?? "",
-            domValue: element.value,
+          // 조합 직후 value를 다시 대입하면 '미술관'의 가운데 음절이 빠지거나 '미굜'처럼 깨진다.
+          bridge.current.accepted.depositor = element.value;
+          session.composingField = null;
+          session.sealNumericCollapse = true;
+          requestAnimationFrame(() => {
+            session.sealNumericCollapse = false;
           });
-        } else {
-          const digits = digitsOnly(element.value, field === "amount" ? undefined : 4);
-          element.value = field === "amount" ? formatAmount(digits) : digits;
+          return;
         }
+        const digits = digitsOnly(element.value, field === "amount" ? undefined : 4);
+        element.value = field === "amount" ? formatAmount(digits) : digits;
         bridge.current.accepted[field] = element.value;
         session.composingField = null;
         session.sealNumericCollapse = true;
-        session.dropDepositorTrailingDigits = field === "depositor";
+        session.dropDepositorTrailingDigits = false;
         requestAnimationFrame(() => {
           session.sealNumericCollapse = false;
-          session.dropDepositorTrailingDigits = false;
         });
       }}
       onBlur={() => {
@@ -145,10 +157,18 @@ const BufferedCollectInput = React.memo(function BufferedCollectInput({
         bridge.current.commit();
       }}
       onChange={(event) => {
+        markCollectInputActive();
         const element = event.currentTarget;
         const native = nativeInputType(event);
         const session = bridge.current.session;
         const focused = document.activeElement === element;
+        if (field === "depositor") {
+          bridge.current.accepted.depositor = element.value;
+          if (native.isComposing || native.inputType === "insertCompositionText") {
+            session.composingField = field;
+          }
+          return;
+        }
         if (focused && (native.isComposing || native.inputType === "insertCompositionText")) {
           session.composingField = field;
           return;
@@ -281,6 +301,8 @@ function CollectFormBody({
     }
   }, [storageKey, values]);
 
+  useEffect(() => () => markCollectInputIdle(), []);
+
   useEffect(() => {
     const saveDraft = () => {
       try {
@@ -356,6 +378,12 @@ function CollectFormBody({
       data-collect-renders={renders.current}
       className="p-3.5 bg-amber-50 rounded-2xl border-2 border-amber-400 shadow-lg my-2 space-y-3 animate-in fade-in slide-in-from-top-2 w-full max-w-full overflow-hidden box-border"
       onClick={(e) => e.stopPropagation()}
+      onFocus={() => markCollectInputActive()}
+      onBlur={(event) => {
+        const next = event.relatedTarget;
+        if (next instanceof Node && event.currentTarget.contains(next)) return;
+        markCollectInputIdle();
+      }}
     >
       <div className="flex items-center justify-between border-b border-amber-200 pb-2">
         <div className="flex items-center gap-1.5">
