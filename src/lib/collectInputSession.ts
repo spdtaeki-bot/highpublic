@@ -52,17 +52,21 @@ export function commitDepositorComposition(args: {
   const { base, compositionData, domValue } = args;
   if (!compositionData) return domValue;
   const expected = `${base}${compositionData}`;
-  if (
-    domValue.startsWith(expected) &&
-    /^\d+$/.test(domValue.slice(expected.length))
-  ) {
-    return expected;
+  if (domValue === expected) return expected;
+  // 금액 숫자가 조합 글자 사이나 뒤에 끼면, 조합에 없는 숫자만 뺀다.
+  // '커티씨' 조합 중 DOM이 '커티1씨75000'이면 입금자명은 '커티씨'다.
+  let index = 0;
+  let output = "";
+  for (const char of domValue) {
+    if (index < expected.length && char === expected[index]) {
+      output += char;
+      index += 1;
+      continue;
+    }
+    if (/\d/.test(char)) continue;
+    output += char;
   }
-  const index = domValue.lastIndexOf(compositionData);
-  if (index >= 0) {
-    const after = domValue.slice(index + compositionData.length);
-    if (/^\d+$/.test(after)) return domValue.slice(0, index + compositionData.length);
-  }
+  if (index === expected.length) return output;
   return domValue;
 }
 

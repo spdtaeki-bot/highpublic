@@ -84,6 +84,14 @@ test("조합이 끝날 때 뒤에 붙은 금액 숫자는 입금자명에 남기
     }),
     "이태희2",
   );
+  assert.equal(
+    commitDepositorComposition({
+      base: "",
+      compositionData: "커티씨",
+      domValue: "커티1씨75000",
+    }),
+    "커티씨",
+  );
 
   const ended = decideCollectFieldChange(
     base({

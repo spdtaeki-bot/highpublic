@@ -1,34 +1,199 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
 import { PaymentMethod } from "../types";
 import {
   additionalCollectShortage,
+  commitDepositorComposition,
   createCollectInputSession,
   decideCollectFieldChange,
   readAdditionalCollectDraft,
+  type CollectInputField,
   type CollectInputSession,
 } from "../lib/collectInputSession";
 
-export function EstablishmentAdditionalCollectForm({
+type CollectValues = {
+  mode: "ADD" | "SET";
+  method: PaymentMethod;
+  depositorName: string;
+  collectedDate: string;
+  collectedTime: string;
+  amountStr: string;
+};
+
+type CollectNodes = Record<CollectInputField, HTMLInputElement | null>;
+
+type CollectBridge = {
+  session: CollectInputSession;
+  accepted: Record<CollectInputField, string>;
+  nodes: CollectNodes;
+  bases: Record<CollectInputField, string>;
+  commit: () => void;
+};
+
+function digitsOnly(value: string, max?: number) {
+  const digits = value.replace(/\D/g, "");
+  return max === undefined ? digits : digits.slice(0, max);
+}
+
+function formatAmount(value: string) {
+  const digits = digitsOnly(value);
+  if (!digits) return "";
+  const amount = Number.parseInt(digits, 10);
+  return Number.isNaN(amount) ? "" : amount.toLocaleString();
+}
+
+function nativeInputType(event: React.ChangeEvent<HTMLInputElement> | React.CompositionEvent<HTMLInputElement>) {
+  const native = event.nativeEvent as InputEvent;
+  return {
+    isComposing: Boolean(native.isComposing),
+    inputType: typeof native.inputType === "string" ? native.inputType : undefined,
+  };
+}
+
+/**
+ * 키 입력마다 부모를 다시 그리면 React가 input.value와 name을 덮어쓰고
+ * 한글 조합의 첫 글자와 금액 숫자가 다른 칸으로 샌다.
+ * 칸은 비제어로 두고, blur와 저장 때만 값을 확정한다.
+ */
+const BufferedCollectInput = React.memo(function BufferedCollectInput({
+  field,
+  defaultValue,
+  placeholder,
+  className,
+  maxLength,
+  bridge,
+}: {
+  field: CollectInputField;
+  defaultValue: string;
+  placeholder: string;
+  className: string;
+  maxLength?: number;
+  bridge: React.MutableRefObject<CollectBridge>;
+}) {
+  const renders = useRef(0);
+  renders.current += 1;
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    bridge.current.nodes[field] = ref.current;
+    return () => {
+      if (bridge.current.nodes[field] === ref.current) bridge.current.nodes[field] = null;
+    };
+  }, [bridge, field]);
+
+  const restore = (element: HTMLInputElement, value: string) => {
+    if (element.value !== value) element.value = value;
+  };
+
+  return (
+    <input
+      ref={ref}
+      type="text"
+      lang={field === "depositor" ? "ko" : undefined}
+      inputMode={field === "depositor" ? "text" : "numeric"}
+      autoComplete="off"
+      maxLength={maxLength}
+      data-collect-field={field}
+      data-collect-renders={renders.current}
+      defaultValue={defaultValue}
+      placeholder={placeholder}
+      className={className}
+      onFocus={(event) => {
+        if (field === "depositor") return;
+        if (bridge.current.session.composingField) return;
+        try {
+          event.currentTarget.select();
+        } catch {
+          // 일부 브라우저는 숫자 입력의 전체 선택을 거절한다.
+        }
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Tab") bridge.current.session.leavingField = field;
+      }}
+      onCompositionStart={(event) => {
+        const session = bridge.current.session;
+        session.composingField = field;
+        const start = event.currentTarget.selectionStart ?? event.currentTarget.value.length;
+        bridge.current.bases[field] = event.currentTarget.value.slice(0, start);
+      }}
+      onCompositionEnd={(event) => {
+        const element = event.currentTarget;
+        const session = bridge.current.session;
+        if (field === "depositor") {
+          element.value = commitDepositorComposition({
+            base: bridge.current.bases[field] ?? "",
+            compositionData: event.data ?? "",
+            domValue: element.value,
+          });
+        } else {
+          const digits = digitsOnly(element.value, field === "amount" ? undefined : 4);
+          element.value = field === "amount" ? formatAmount(digits) : digits;
+        }
+        bridge.current.accepted[field] = element.value;
+        session.composingField = null;
+        session.sealNumericCollapse = true;
+        session.dropDepositorTrailingDigits = field === "depositor";
+        requestAnimationFrame(() => {
+          session.sealNumericCollapse = false;
+          session.dropDepositorTrailingDigits = false;
+        });
+      }}
+      onBlur={() => {
+        const session = bridge.current.session;
+        if (session.leavingField === field) session.leavingField = null;
+        if (session.composingField === field) session.composingField = null;
+        bridge.current.commit();
+      }}
+      onChange={(event) => {
+        const element = event.currentTarget;
+        const native = nativeInputType(event);
+        const session = bridge.current.session;
+        const focused = document.activeElement === element;
+        if (focused && (native.isComposing || native.inputType === "insertCompositionText")) {
+          session.composingField = field;
+          return;
+        }
+        const decision = decideCollectFieldChange({
+          field,
+          domValue: element.value,
+          previousValue: bridge.current.accepted[field],
+          focusedField: focused ? field : null,
+          composingField: session.composingField,
+          leavingField: session.leavingField,
+          isComposing: native.isComposing,
+          inputType: native.inputType,
+          sealNumericCollapse: session.sealNumericCollapse,
+          dropTrailingDigits: session.dropDepositorTrailingDigits,
+        });
+        if (!decision.accept) {
+          restore(element, decision.value);
+          return;
+        }
+        bridge.current.accepted[field] = element.value;
+      }}
+    />
+  );
+});
+
+function CollectFormBody({
   estName,
   draftKey,
-  originalTotal,
-  currentCollected,
-  onCollectAdditional,
-  onCancel,
+  latest,
+  openedTotals,
 }: {
   estName: string;
   draftKey: string;
-  originalTotal: number;
-  currentCollected: number;
-  onCollectAdditional: (
-    method: PaymentMethod,
-    additionalAmount: number,
-    depositorName: string,
-    collectedDate: string,
-    collectedTime: string,
-  ) => Promise<void> | void;
-  onCancel: () => void;
+  latest: React.MutableRefObject<{
+    onCollectAdditional: (
+      method: PaymentMethod,
+      additionalAmount: number,
+      depositorName: string,
+      collectedDate: string,
+      collectedTime: string,
+    ) => Promise<void> | void;
+    onCancel: () => void;
+  }>;
+  openedTotals: React.MutableRefObject<{ originalTotal: number; currentCollected: number }>;
 }) {
   const storageKey = `office_additional_collect_draft:${draftKey}`;
   const [initialDraft] = useState(() =>
@@ -36,95 +201,142 @@ export function EstablishmentAdditionalCollectForm({
       typeof sessionStorage === "undefined" ? null : sessionStorage.getItem(storageKey),
     ),
   );
-  // 열린 뒤 부모가 수금액을 먼저 올려도, 이 창은 열 때의 합계만 본다.
-  // 입력 중인 금액을 새 합계 위에 다시 더하면 '초과 수금'이 잠깐 뜬다.
-  const openedTotals = useRef({ originalTotal, currentCollected });
   const [mode, setMode] = useState<"ADD" | "SET">(initialDraft?.mode || "ADD");
-  const [amountStr, setAmountStr] = useState(initialDraft?.amountStr || "");
   const [method, setMethod] = useState<PaymentMethod>(initialDraft?.method || "TRANSFER");
-  const [depositorName, setDepositorName] = useState(initialDraft?.depositorName || "");
-  const [collectedDate, setCollectedDate] = useState(
-    initialDraft?.collectedDate || format(new Date(), "MMdd"),
-  );
-  const [collectedTime, setCollectedTime] = useState(
-    initialDraft?.collectedTime || format(new Date(), "HHmm"),
-  );
+  const [values, setValues] = useState<CollectValues>(() => ({
+    mode: initialDraft?.mode || "ADD",
+    method: initialDraft?.method || "TRANSFER",
+    depositorName: initialDraft?.depositorName || "",
+    collectedDate: initialDraft?.collectedDate || format(new Date(), "MMdd"),
+    collectedTime: initialDraft?.collectedTime || format(new Date(), "HHmm"),
+    amountStr: initialDraft?.amountStr || "",
+  }));
   const [isSaving, setIsSaving] = useState(false);
   const savingRef = useRef(false);
-  const sessionRef = useRef<CollectInputSession>(createCollectInputSession());
-  const depositorLiveRef = useRef(initialDraft?.depositorName || "");
-
-  const commitDepositor = useCallback((value: string) => {
-    depositorLiveRef.current = value;
-    setDepositorName(value);
-  }, []);
-
-  useEffect(() => {
-    if (sessionRef.current.composingField) return;
-    const draft = {
-      mode,
-      amountStr,
-      method,
-      depositorName,
-      collectedDate,
-      collectedTime,
+  const modeRef = useRef(mode);
+  const methodRef = useRef(method);
+  modeRef.current = mode;
+  methodRef.current = method;
+  const seed = useRef({
+    date: values.collectedDate,
+    time: values.collectedTime,
+    depositor: values.depositorName,
+    amount: values.amountStr,
+  }).current;
+  const renders = useRef(0);
+  renders.current += 1;
+  const bridge = useRef<CollectBridge>(null as unknown as CollectBridge);
+  if (!bridge.current) {
+    const accepted = {
+      date: values.collectedDate,
+      time: values.collectedTime,
+      depositor: values.depositorName,
+      amount: values.amountStr,
     };
-    try {
-      sessionStorage.setItem(storageKey, JSON.stringify(draft));
-    } catch {
-      // 저장소가 막혀도 현재 React 상태의 입력은 계속 유지한다.
-    }
-  }, [
-    amountStr,
-    collectedDate,
-    collectedTime,
-    depositorName,
-    method,
-    mode,
-    storageKey,
-  ]);
+    bridge.current = {
+      session: createCollectInputSession(),
+      accepted,
+      nodes: { date: null, time: null, depositor: null, amount: null },
+      bases: { date: "", time: "", depositor: "", amount: "" },
+      commit: () => undefined,
+    };
+  }
+
+  const readLive = (): CollectValues => {
+    const nodes = bridge.current.nodes;
+    const date = digitsOnly(nodes.date?.value ?? bridge.current.accepted.date, 4);
+    const time = digitsOnly(nodes.time?.value ?? bridge.current.accepted.time, 4);
+    const depositor = nodes.depositor?.value ?? bridge.current.accepted.depositor;
+    const amount = formatAmount(nodes.amount?.value ?? bridge.current.accepted.amount);
+    return {
+      mode: modeRef.current,
+      method: methodRef.current,
+      depositorName: depositor,
+      collectedDate: date,
+      collectedTime: time,
+      amountStr: amount,
+    };
+  };
+
+  const commit = () => {
+    const next = readLive();
+    const nodes = bridge.current.nodes;
+    if (nodes.date) nodes.date.value = next.collectedDate;
+    if (nodes.time) nodes.time.value = next.collectedTime;
+    if (nodes.amount) nodes.amount.value = next.amountStr;
+    bridge.current.accepted.date = next.collectedDate;
+    bridge.current.accepted.time = next.collectedTime;
+    bridge.current.accepted.depositor = next.depositorName;
+    bridge.current.accepted.amount = next.amountStr;
+    setValues(next);
+  };
+  bridge.current.commit = commit;
 
   useEffect(() => {
+    if (bridge.current.session.composingField) return;
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(values));
+    } catch {
+      // 저장소가 막혀도 입력칸의 글자는 그대로 둔다.
+    }
+  }, [storageKey, values]);
+
+  useEffect(() => {
+    const saveDraft = () => {
+      try {
+        sessionStorage.setItem(storageKey, JSON.stringify(readLive()));
+      } catch {
+        // 페이지를 닫는 중에는 저장 실패를 무시한다.
+      }
+    };
     const preventAccidentalReload = (event: BeforeUnloadEvent) => {
+      saveDraft();
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", preventAccidentalReload);
-    return () =>
-      window.removeEventListener("beforeunload", preventAccidentalReload);
-  }, []);
+    return () => window.removeEventListener("beforeunload", preventAccidentalReload);
+  }, [storageKey]);
 
   const shortage = Math.max(
     0,
     openedTotals.current.originalTotal - openedTotals.current.currentCollected,
   );
-  const inputNum = amountStr ? parseInt(amountStr.replace(/,/g, ""), 10) : 0;
-  const additionalAmount = mode === "ADD" ? inputNum : inputNum - openedTotals.current.currentCollected;
+  const inputNum = values.amountStr ? parseInt(values.amountStr.replace(/,/g, ""), 10) : 0;
+  const additionalAmount =
+    mode === "ADD" ? inputNum : inputNum - openedTotals.current.currentCollected;
   const newTotalCollected = openedTotals.current.currentCollected + additionalAmount;
   const newShortage = additionalCollectShortage({
     originalTotal: openedTotals.current.originalTotal,
     currentCollected: openedTotals.current.currentCollected,
     mode,
-    amountStr,
+    amountStr: values.amountStr,
   });
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (savingRef.current || sessionRef.current.composingField) return;
-    if (additionalAmount === 0 && mode === "ADD") {
+    if (savingRef.current) return;
+    const live = readLive();
+    const liveAmount = live.amountStr ? parseInt(live.amountStr.replace(/,/g, ""), 10) : 0;
+    const liveAdditional =
+      modeRef.current === "ADD"
+        ? liveAmount
+        : liveAmount - openedTotals.current.currentCollected;
+    if (liveAdditional === 0 && modeRef.current === "ADD") {
       alert("추가 수금 금액을 입력해주세요.");
       return;
     }
-
+    if (bridge.current.session.composingField) bridge.current.session.composingField = null;
+    commit();
     savingRef.current = true;
     setIsSaving(true);
     try {
-      await onCollectAdditional(
+      await latest.current.onCollectAdditional(
         method,
-        additionalAmount,
-        depositorLiveRef.current,
-        collectedDate,
-        collectedTime,
+        liveAdditional,
+        live.depositorName,
+        live.collectedDate,
+        live.collectedTime,
       );
       sessionStorage.removeItem(storageKey);
     } catch {
@@ -135,9 +347,13 @@ export function EstablishmentAdditionalCollectForm({
     }
   };
 
+  const datePlaceholder = format(new Date(), "MMdd");
+  const timePlaceholder = format(new Date(), "HHmm");
+
   return (
     <form
       onSubmit={handleSubmit}
+      data-collect-renders={renders.current}
       className="p-3.5 bg-amber-50 rounded-2xl border-2 border-amber-400 shadow-lg my-2 space-y-3 animate-in fade-in slide-in-from-top-2 w-full max-w-full overflow-hidden box-border"
       onClick={(e) => e.stopPropagation()}
     >
@@ -151,8 +367,12 @@ export function EstablishmentAdditionalCollectForm({
           <button
             type="button"
             onClick={() => {
+              modeRef.current = "ADD";
               setMode("ADD");
-              setAmountStr("");
+              const amount = bridge.current.nodes.amount;
+              if (amount) amount.value = "";
+              bridge.current.accepted.amount = "";
+              commit();
             }}
             className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${
               mode === "ADD"
@@ -165,12 +385,15 @@ export function EstablishmentAdditionalCollectForm({
           <button
             type="button"
             onClick={() => {
+              modeRef.current = "SET";
               setMode("SET");
-              setAmountStr(
-                openedTotals.current.originalTotal
-                  ? openedTotals.current.originalTotal.toLocaleString()
-                  : "",
-              );
+              const next = openedTotals.current.originalTotal
+                ? openedTotals.current.originalTotal.toLocaleString()
+                : "";
+              const amount = bridge.current.nodes.amount;
+              if (amount) amount.value = next;
+              bridge.current.accepted.amount = next;
+              commit();
             }}
             className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${
               mode === "SET"
@@ -210,8 +433,13 @@ export function EstablishmentAdditionalCollectForm({
               type="button"
               onClick={() => {
                 const now = new Date();
-                setCollectedDate(format(now, "MMdd"));
-                setCollectedTime(format(now, "HHmm"));
+                const date = format(now, "MMdd");
+                const time = format(now, "HHmm");
+                if (bridge.current.nodes.date) bridge.current.nodes.date.value = date;
+                if (bridge.current.nodes.time) bridge.current.nodes.time.value = time;
+                bridge.current.accepted.date = date;
+                bridge.current.accepted.time = time;
+                commit();
               }}
               className="text-[10px] font-black text-amber-800 underline hover:text-amber-950 cursor-pointer"
             >
@@ -221,23 +449,23 @@ export function EstablishmentAdditionalCollectForm({
           <div className="grid grid-cols-2 gap-2 mt-0.5">
             <div className="flex flex-col gap-0.5">
               <span className="text-[9px] font-extrabold text-stone-500 ml-1">날짜 (MMDD)</span>
-              <DigitsField
+              <BufferedCollectInput
                 field="date"
-                value={collectedDate}
-                sessionRef={sessionRef}
-                onValue={setCollectedDate}
-                placeholder={format(new Date(), "MMdd")}
+                defaultValue={seed.date}
+                bridge={bridge}
+                placeholder={datePlaceholder}
+                maxLength={4}
                 className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-xl text-[13px] font-black text-stone-900 focus:ring-2 focus:ring-amber-700 outline-none transition-all"
               />
             </div>
             <div className="flex flex-col gap-0.5">
               <span className="text-[9px] font-extrabold text-stone-500 ml-1">시간 (HHMM)</span>
-              <DigitsField
+              <BufferedCollectInput
                 field="time"
-                value={collectedTime}
-                sessionRef={sessionRef}
-                onValue={setCollectedTime}
-                placeholder={format(new Date(), "HHmm")}
+                defaultValue={seed.time}
+                bridge={bridge}
+                placeholder={timePlaceholder}
+                maxLength={4}
                 className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-xl text-[13px] font-black text-stone-900 focus:ring-2 focus:ring-amber-700 outline-none transition-all"
               />
             </div>
@@ -247,10 +475,12 @@ export function EstablishmentAdditionalCollectForm({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <div className="flex flex-col gap-1">
             <span className="text-[10px] font-black text-amber-950 uppercase ml-1">2. 입금자명 (선택)</span>
-            <DepositorField
-              committedValue={depositorName}
-              onCommit={commitDepositor}
-              sessionRef={sessionRef}
+            <BufferedCollectInput
+              field="depositor"
+              defaultValue={seed.depositor}
+              bridge={bridge}
+              placeholder="입금자명 입력 (선택)"
+              className="w-full px-2.5 py-2 bg-white border border-stone-200 rounded-xl text-[13px] font-bold text-stone-900 focus:ring-2 focus:ring-amber-700 outline-none transition-all placeholder:text-stone-300 placeholder:font-normal"
             />
           </div>
 
@@ -291,25 +521,29 @@ export function EstablishmentAdditionalCollectForm({
             {shortage > 0 && mode === "ADD" && (
               <button
                 type="button"
-                onClick={() => setAmountStr(shortage.toLocaleString())}
+                onClick={() => {
+                  const next = shortage.toLocaleString();
+                  const amount = bridge.current.nodes.amount;
+                  if (amount) amount.value = next;
+                  bridge.current.accepted.amount = next;
+                  commit();
+                }}
                 className="text-[10px] font-black text-amber-800 underline hover:text-amber-950 cursor-pointer"
               >
                 미수 잔액({shortage.toLocaleString()}원) 전액 채우기
               </button>
             )}
           </div>
-          <DigitsField
+          <BufferedCollectInput
             field="amount"
-            value={amountStr}
-            sessionRef={sessionRef}
-            onValue={setAmountStr}
+            defaultValue={seed.amount}
+            bridge={bridge}
             placeholder={
               mode === "ADD"
                 ? `추가 수금액 입력 (예: ${shortage.toLocaleString()})`
                 : `${openedTotals.current.originalTotal.toLocaleString()}원`
             }
             className="w-full px-3 py-2 bg-white border-2 border-amber-300 rounded-xl text-[16px] font-black text-amber-950 focus:ring-2 focus:ring-amber-700 outline-none transition-all placeholder:text-stone-300 placeholder:font-normal"
-            emphasize
           />
         </div>
       </div>
@@ -345,7 +579,7 @@ export function EstablishmentAdditionalCollectForm({
           type="button"
           onClick={() => {
             sessionStorage.removeItem(storageKey);
-            onCancel();
+            latest.current.onCancel();
           }}
           disabled={isSaving}
           className="px-4 py-2 bg-white text-stone-600 rounded-xl text-xs font-black border border-stone-200 hover:bg-stone-100 cursor-pointer"
@@ -357,186 +591,45 @@ export function EstablishmentAdditionalCollectForm({
   );
 }
 
-function nativeInputType(event: React.ChangeEvent<HTMLInputElement> | React.CompositionEvent<HTMLInputElement>) {
-  const native = event.nativeEvent as InputEvent;
-  return {
-    isComposing: Boolean(native.isComposing),
-    inputType: typeof native.inputType === "string" ? native.inputType : undefined,
-  };
+const StableCollectFormBody = React.memo(
+  CollectFormBody,
+  (prev, next) =>
+    prev.estName === next.estName &&
+    prev.draftKey === next.draftKey &&
+    prev.latest === next.latest &&
+    prev.openedTotals === next.openedTotals,
+);
+
+export function EstablishmentAdditionalCollectForm({
+  estName,
+  draftKey,
+  originalTotal,
+  currentCollected,
+  onCollectAdditional,
+  onCancel,
+}: {
+  estName: string;
+  draftKey: string;
+  originalTotal: number;
+  currentCollected: number;
+  onCollectAdditional: (
+    method: PaymentMethod,
+    additionalAmount: number,
+    depositorName: string,
+    collectedDate: string,
+    collectedTime: string,
+  ) => Promise<void> | void;
+  onCancel: () => void;
+}) {
+  const latest = useRef({ onCollectAdditional, onCancel });
+  latest.current = { onCollectAdditional, onCancel };
+  const openedTotals = useRef({ originalTotal, currentCollected });
+  return (
+    <StableCollectFormBody
+      estName={estName}
+      draftKey={draftKey}
+      latest={latest}
+      openedTotals={openedTotals}
+    />
+  );
 }
-
-const DigitsField = React.memo(function DigitsField({
-  field,
-  value,
-  onValue,
-  sessionRef,
-  placeholder,
-  className,
-  emphasize = false,
-}: {
-  field: "date" | "time" | "amount";
-  value: string;
-  onValue: (value: string) => void;
-  sessionRef: React.MutableRefObject<CollectInputSession>;
-  placeholder: string;
-  className: string;
-  emphasize?: boolean;
-}) {
-  const onFocus = (event: React.FocusEvent<HTMLInputElement>) => {
-    const element = event.currentTarget;
-    requestAnimationFrame(() => {
-      if (document.activeElement !== element) return;
-      if (sessionRef.current.composingField || sessionRef.current.sealNumericCollapse) return;
-      try {
-        element.select();
-      } catch {
-        // 일부 브라우저는 숫자 입력의 전체 선택을 거절한다.
-      }
-    });
-  };
-
-  return (
-    <input
-      type="text"
-      inputMode="numeric"
-      autoComplete="off"
-      maxLength={emphasize ? undefined : 4}
-      data-collect-field={field}
-      value={value}
-      placeholder={placeholder}
-      className={className}
-      onFocus={onFocus}
-      onKeyDown={(event) => {
-        if (event.key === "Tab") sessionRef.current.leavingField = field;
-      }}
-      onBlur={() => {
-        if (sessionRef.current.leavingField === field) sessionRef.current.leavingField = null;
-      }}
-      onChange={(event) => {
-        const native = nativeInputType(event);
-        const decision = decideCollectFieldChange({
-          field,
-          domValue: event.currentTarget.value,
-          previousValue: value,
-          focusedField: document.activeElement === event.currentTarget ? field : null,
-          composingField: sessionRef.current.composingField,
-          leavingField: sessionRef.current.leavingField,
-          isComposing: native.isComposing,
-          inputType: native.inputType,
-          sealNumericCollapse: sessionRef.current.sealNumericCollapse,
-          dropTrailingDigits: sessionRef.current.dropDepositorTrailingDigits,
-        });
-        if (!decision.accept) {
-          event.currentTarget.value = decision.value;
-          return;
-        }
-        if (decision.value === value) {
-          event.currentTarget.value = value;
-          return;
-        }
-        onValue(decision.value);
-      }}
-    />
-  );
-});
-
-const DepositorField = React.memo(function DepositorField({
-  committedValue,
-  onCommit,
-  sessionRef,
-}: {
-  committedValue: string;
-  onCommit: (value: string) => void;
-  sessionRef: React.MutableRefObject<CollectInputSession>;
-}) {
-  const ref = useRef<HTMLInputElement>(null);
-  const liveRef = useRef(committedValue);
-  const baseRef = useRef("");
-
-  useEffect(() => {
-    const element = ref.current;
-    if (!element || sessionRef.current.composingField === "depositor") return;
-    if (element.value !== committedValue) element.value = committedValue;
-    liveRef.current = committedValue;
-  }, [committedValue, sessionRef]);
-
-  const apply = (
-    element: HTMLInputElement,
-    extras: {
-      compositionData?: string;
-      compositionBase?: string;
-      isComposing: boolean;
-      inputType?: string;
-    },
-  ) => {
-    const decision = decideCollectFieldChange({
-      field: "depositor",
-      domValue: element.value,
-      previousValue: liveRef.current,
-      focusedField: document.activeElement === element ? "depositor" : null,
-      composingField: sessionRef.current.composingField,
-      leavingField: sessionRef.current.leavingField,
-      dropTrailingDigits: sessionRef.current.dropDepositorTrailingDigits,
-      isComposing: extras.isComposing,
-      inputType: extras.inputType,
-      compositionData: extras.compositionData,
-      compositionBase: extras.compositionBase,
-    });
-    if (element.value !== decision.value) element.value = decision.value;
-    if (!decision.accept) return;
-    liveRef.current = decision.value;
-    if (sessionRef.current.composingField !== "depositor") onCommit(decision.value);
-  };
-
-  return (
-    <input
-      ref={ref}
-      type="text"
-      lang="ko"
-      autoComplete="off"
-      data-collect-field="depositor"
-      defaultValue={committedValue}
-      onCompositionStart={(event) => {
-        sessionRef.current.composingField = "depositor";
-        const start = event.currentTarget.selectionStart ?? event.currentTarget.value.length;
-        baseRef.current = event.currentTarget.value.slice(0, start);
-      }}
-      onCompositionEnd={(event) => {
-        const native = nativeInputType(event);
-        sessionRef.current.composingField = null;
-        apply(event.currentTarget, {
-          compositionData: event.data ?? "",
-          compositionBase: baseRef.current,
-          isComposing: native.isComposing,
-          inputType: native.inputType,
-        });
-        sessionRef.current.sealNumericCollapse = true;
-        sessionRef.current.dropDepositorTrailingDigits = true;
-        requestAnimationFrame(() => {
-          sessionRef.current.sealNumericCollapse = false;
-          sessionRef.current.dropDepositorTrailingDigits = false;
-        });
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Tab") sessionRef.current.leavingField = "depositor";
-      }}
-      onBlur={() => {
-        if (sessionRef.current.leavingField === "depositor") {
-          sessionRef.current.leavingField = null;
-        }
-        if (sessionRef.current.composingField === "depositor") {
-          sessionRef.current.composingField = null;
-        }
-      }}
-      onChange={(event) => {
-        const native = nativeInputType(event);
-        apply(event.currentTarget, {
-          isComposing: native.isComposing || sessionRef.current.composingField === "depositor",
-          inputType: native.inputType,
-        });
-      }}
-      className="w-full px-2.5 py-2 bg-white border border-stone-200 rounded-xl text-[13px] font-bold text-stone-900 focus:ring-2 focus:ring-amber-700 outline-none transition-all placeholder:text-stone-300 placeholder:font-normal"
-      placeholder="입금자명 입력 (선택)"
-    />
-  );
-});
