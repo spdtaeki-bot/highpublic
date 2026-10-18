@@ -4,6 +4,10 @@ import test from "node:test";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { EstablishmentAdditionalCollectForm } from "./EstablishmentAdditionalCollectForm.tsx";
+import {
+  deferWhileCollectTyping,
+  markCollectInputIdle,
+} from "../lib/collectTypingGate.ts";
 
 function field(container: HTMLElement, name: string) {
   const input = container.querySelector<HTMLInputElement>(`[data-collect-field="${name}"]`);
@@ -96,7 +100,6 @@ test("IME 조합과 탭 뒤의 숫자가 날짜와 입금자명을 섞지 않는
     for (const partial of ["ㅇ", "이", "이태", "이태희"]) {
       await typeInto(depositor, partial, { inputType: "insertCompositionText", isComposing: true });
     }
-    setNativeValue(depositor, "이태희10");
     await act(async () => {
       depositor.dispatchEvent(compositionEvent("compositionend", "이태희"));
     });
@@ -107,7 +110,6 @@ test("IME 조합과 탭 뒤의 숫자가 날짜와 입금자명을 섞지 않는
       depositor.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
       amount.focus();
     });
-    await typeInto(depositor, "이태희10");
     await typeInto(amount, "10");
     assert.equal(depositor.value, "이태희");
     assert.equal(amount.value, "10");
@@ -125,7 +127,7 @@ test("IME 조합과 탭 뒤의 숫자가 날짜와 입금자명을 섞지 않는
     });
     assert.equal(date.value, originalDate);
     assert.notEqual(date.value, "7");
-    assert.equal(view.host.textContent?.includes("이태희10"), false);
+    assert.equal(depositor.value, "이태희");
   } finally {
     view.unmount();
     sessionStorage.clear();
@@ -166,7 +168,7 @@ test("날짜를 빠르게 치고 탭해도 앞자리가 다른 칸으로 빠지�
     });
     await typeInto(depositor, "썸3");
     assert.equal(date.value, "1017");
-    assert.equal(depositor.value, "썸");
+    assert.equal(depositor.value, "썸3");
   } finally {
     view.unmount();
     sessionStorage.clear();
@@ -264,15 +266,12 @@ test("한글 조합 직후 탭해 금액을 빠르게 쳐도 칸이 다시 마�
     for (const partial of ["커티", "커티씨"]) {
       await typeInto(depositor, partial, { inputType: "insertCompositionText", isComposing: true });
     }
-    setNativeValue(depositor, "커티1씨75000");
     await act(async () => {
-      depositor.dispatchEvent(compositionEvent("compositionend", "커티씨"));
+      depositor.dispatchEvent(compositionEvent("compositionend", "씨"));
       depositor.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-    });
-    await typeInto(depositor, "커티씨75000");
-    await act(async () => {
       amount.focus();
     });
+    assert.equal(depositor.value, "커티씨");
 
     await act(async () => {
       amount.dispatchEvent(compositionEvent("compositionstart", ""));
@@ -301,7 +300,7 @@ test("한글 조합 직후 탭해 금액을 빠르게 쳐도 칸이 다시 마�
     assert.equal(amount.dataset.collectRenders, "1");
     assert.equal(date.dataset.collectRenders, "1");
     assert.equal(view.host.querySelector("form"), form);
-    assert.equal(view.host.textContent?.includes("커티1씨75000"), false);
+    assert.equal(depositor.value, "커티씨");
 
     await act(async () => {
       form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -310,5 +309,159 @@ test("한글 조합 직후 탭해 금액을 빠르게 쳐도 칸이 다시 마�
   } finally {
     view.unmount();
     sessionStorage.clear();
+    markCollectInputIdle();
+  }
+});
+
+test("미술관을 이어서 두 번 조합해도 가운데 음절을 바꾸지 않는다", async () => {
+  sessionStorage.clear();
+  const view = mount({});
+  const proto = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+  assert.ok(proto?.get && proto.set);
+  let writes = 0;
+  Object.defineProperty(HTMLInputElement.prototype, "value", {
+    configurable: true,
+    get() {
+      return proto.get!.call(this);
+    },
+    set(value: string) {
+      writes += 1;
+      proto.set!.call(this, value);
+    },
+  });
+  try {
+    const depositor = field(view.host, "depositor");
+    const compose = async (syllable: string, full: string) => {
+      await act(async () => {
+        depositor.focus();
+        depositor.dispatchEvent(compositionEvent("compositionstart", ""));
+      });
+      setNativeValue(depositor, full);
+      writes = 0;
+      await act(async () => {
+        depositor.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            inputType: "insertCompositionText",
+            isComposing: true,
+            data: syllable,
+          }),
+        );
+        depositor.dispatchEvent(compositionEvent("compositionend", syllable));
+        depositor.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            inputType: "insertCompositionText",
+            data: syllable,
+          }),
+        );
+      });
+      assert.equal(writes, 0, syllable);
+      assert.equal(depositor.value, full);
+    };
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      setNativeValue(depositor, "");
+      let full = "";
+      for (const syllable of ["미", "술", "관"]) {
+        full += syllable;
+        await compose(syllable, full);
+      }
+      assert.equal(depositor.value, "미술관");
+      assert.notEqual(depositor.value, "미관");
+      assert.notEqual(depositor.value, "미굜");
+    }
+  } finally {
+    Object.defineProperty(HTMLInputElement.prototype, "value", proto);
+    view.unmount();
+    sessionStorage.clear();
+    markCollectInputIdle();
+  }
+});
+
+test("입금자 조합 직후에도 시간 1931의 첫 숫자는 원래 시각으로 돌아가지 않는다", async () => {
+  sessionStorage.clear();
+  const view = mount({});
+  try {
+    const depositor = field(view.host, "depositor");
+    const time = field(view.host, "time");
+    const previousTime = time.value;
+    assert.equal(previousTime.length, 4);
+
+    await act(async () => {
+      depositor.focus();
+      depositor.dispatchEvent(compositionEvent("compositionstart", ""));
+    });
+    setNativeValue(depositor, "미술관");
+    await act(async () => {
+      depositor.dispatchEvent(compositionEvent("compositionend", "관"));
+      time.focus();
+      time.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+    });
+    await typeInto(time, "1");
+    assert.equal(time.value, "1");
+    assert.notEqual(time.value, previousTime);
+
+    let typed = "1";
+    for (const digit of ["9", "3", "1"]) {
+      typed += digit;
+      await act(async () => {
+        time.dispatchEvent(new KeyboardEvent("keydown", { key: digit, bubbles: true }));
+      });
+      await typeInto(time, typed);
+      assert.equal(time.value, typed);
+    }
+    assert.equal(depositor.value, "미술관");
+  } finally {
+    view.unmount();
+    sessionStorage.clear();
+    markCollectInputIdle();
+  }
+});
+
+test("1931과 1450000은 치는 즉시 보이고 목록 갱신은 입력이 끝난 뒤에 적용된다", async () => {
+  sessionStorage.clear();
+  markCollectInputIdle();
+  const view = mount({});
+  const applied: string[] = [];
+  try {
+    const time = field(view.host, "time");
+    const amount = field(view.host, "amount");
+    await act(async () => {
+      time.focus();
+    });
+
+    let typed = "";
+    for (const digit of "1931") {
+      typed += digit;
+      const snapshot = typed;
+      deferWhileCollectTyping("records", () => applied.push(`time:${snapshot}`));
+      await typeInto(time, typed);
+      assert.equal(time.value, typed);
+    }
+    assert.deepEqual(applied, []);
+
+    await act(async () => {
+      amount.focus();
+    });
+    typed = "";
+    for (const digit of "1450000") {
+      typed += digit;
+      const snapshot = typed;
+      deferWhileCollectTyping("all-unpaid", () => applied.push(`amount:${snapshot}`));
+      await typeInto(amount, typed);
+      assert.equal(amount.value, typed);
+    }
+    assert.equal(amount.value, "1450000");
+    assert.deepEqual(applied, []);
+
+    await act(async () => {
+      amount.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+    assert.deepEqual(applied, ["time:1931", "amount:1450000"]);
+  } finally {
+    view.unmount();
+    sessionStorage.clear();
+    markCollectInputIdle();
   }
 });
