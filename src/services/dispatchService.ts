@@ -21,6 +21,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { deferWhileCollectTyping } from '../lib/collectTypingGate';
 import { DispatchRecord, BouncedRecord, SYSTEM_RATES, COMMISSION_RATE, SystemType, StaffType, ActiveChoice } from '../types';
 
 const COLLECTION_NAME = 'dispatches';
@@ -332,9 +333,11 @@ export const subscribeToStaff = (callback: (staff: any[]) => void, onError?: (er
     orderBy('name', 'asc')
   );
   return onSnapshot(q, (snapshot) => {
-    const staff = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
-    callback(staff);
-    void clearObsoleteStaffOfficeFields(staff);
+    deferWhileCollectTyping("staff", () => {
+      const staff = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
+      callback(staff);
+      void clearObsoleteStaffOfficeFields(staff);
+    });
   }, (error) => {
     if (onError) onError(error);
     const errInfo = getErrorInfo(error, OperationType.LIST, STAFF_COLLECTION);
@@ -584,19 +587,21 @@ export const updateManualDailyProfitsMultiple = async (
 export const subscribeToAttendance = (date: string, callback: (data: { staffIds: string[], offStaffIds: string[], checkInTimes?: Record<string, any>, offTimes?: Record<string, any>, manualDailyProfits?: Record<string, number>, activeChoices?: Record<string, ActiveChoice> }) => void, onError?: (error: Error) => void) => {
   const id = `${FIXED_UID}_${date}`;
   return onSnapshot(doc(db, ATTENDANCE_COLLECTION, id), (doc) => {
-    if (doc.exists()) {
-      const data = doc.data();
-      callback({
-        staffIds: data.staffIds || [],
-        offStaffIds: data.offStaffIds || [],
-        checkInTimes: data.checkInTimes || {},
-        offTimes: data.offTimes || {},
-        manualDailyProfits: data.manualDailyProfits || {},
-        activeChoices: data.activeChoices || {},
-      });
-    } else {
-      callback({ staffIds: [], offStaffIds: [], checkInTimes: {}, offTimes: {}, manualDailyProfits: {}, activeChoices: {} });
-    }
+    deferWhileCollectTyping("attendance", () => {
+      if (doc.exists()) {
+        const data = doc.data();
+        callback({
+          staffIds: data.staffIds || [],
+          offStaffIds: data.offStaffIds || [],
+          checkInTimes: data.checkInTimes || {},
+          offTimes: data.offTimes || {},
+          manualDailyProfits: data.manualDailyProfits || {},
+          activeChoices: data.activeChoices || {},
+        });
+      } else {
+        callback({ staffIds: [], offStaffIds: [], checkInTimes: {}, offTimes: {}, manualDailyProfits: {}, activeChoices: {} });
+      }
+    });
   }, (error) => {
     if (onError) onError(error);
     const errInfo = getErrorInfo(error, OperationType.GET, ATTENDANCE_COLLECTION);
@@ -619,13 +624,15 @@ export const subscribeToWeeklyAttendance = (
   return onSnapshot(
     q,
     (snapshot) => {
-      const data = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        date: doc.data().date,
-        staffIds: doc.data().staffIds || [],
-        checkInTimes: doc.data().checkInTimes || {},
-      }));
-      callback(data);
+      deferWhileCollectTyping("weekly-attendance", () => {
+        const data = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          date: doc.data().date,
+          staffIds: doc.data().staffIds || [],
+          checkInTimes: doc.data().checkInTimes || {},
+        }));
+        callback(data);
+      });
     },
     (error) => {
       if (onError) onError(error);
@@ -663,7 +670,9 @@ export const subscribeToEstablishments = (callback: (establishments: any[]) => v
     orderBy('name', 'asc')
   );
   return onSnapshot(q, (snapshot) => {
-    callback(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    deferWhileCollectTyping("establishments", () => {
+      callback(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
   }, (error) => {
     if (onError) onError(error);
     const errInfo = getErrorInfo(error, OperationType.LIST, ESTABLISHMENT_COLLECTION);
@@ -1041,8 +1050,10 @@ export const subscribeToDispatches = (date: string, callback: (records: Dispatch
   );
 
   return onSnapshot(q, (snapshot) => {
-    const records = snapshot.docs.map(doc => normalizeDispatchRecord(doc.id, doc.data()));
-    callback(records);
+    deferWhileCollectTyping("records", () => {
+      const records = snapshot.docs.map(doc => normalizeDispatchRecord(doc.id, doc.data()));
+      callback(records);
+    });
   }, (error) => {
     if (onError) onError(error);
     const errInfo = getErrorInfo(error, OperationType.LIST, COLLECTION_NAME);
@@ -1059,8 +1070,10 @@ export const subscribeToAllUnpaidDispatches = (callback: (records: DispatchRecor
   );
 
   return onSnapshot(q, (snapshot) => {
-    const records = snapshot.docs.map(doc => normalizeDispatchRecord(doc.id, doc.data()));
-    callback(records);
+    deferWhileCollectTyping("all-unpaid", () => {
+      const records = snapshot.docs.map(doc => normalizeDispatchRecord(doc.id, doc.data()));
+      callback(records);
+    });
   }, (error) => {
     if (onError) onError(error);
     const errInfo = getErrorInfo(error, OperationType.LIST, COLLECTION_NAME);
@@ -1077,8 +1090,10 @@ export const subscribeToUnpaidStaffDispatches = (callback: (records: DispatchRec
   );
 
   return onSnapshot(q, (snapshot) => {
-    const records = snapshot.docs.map(doc => normalizeDispatchRecord(doc.id, doc.data()));
-    callback(records);
+    deferWhileCollectTyping("unpaid-staff", () => {
+      const records = snapshot.docs.map(doc => normalizeDispatchRecord(doc.id, doc.data()));
+      callback(records);
+    });
   }, (error) => {
     if (onError) onError(error);
     const errInfo = getErrorInfo(error, OperationType.LIST, COLLECTION_NAME);
@@ -1146,11 +1161,13 @@ export const subscribeToBouncedRecords = (
   );
 
   return onSnapshot(q, (snapshot) => {
-    const records = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data()
-    } as BouncedRecord));
-    callback(records);
+    deferWhileCollectTyping("bounced", () => {
+      const records = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data()
+      } as BouncedRecord));
+      callback(records);
+    });
   }, (error) => {
     if (onError) onError(error);
     const errInfo = getErrorInfo(error, OperationType.LIST, BOUNCED_COLLECTION);
@@ -1178,12 +1195,14 @@ export const subscribeToDispatchesByDateRange = (
     q,
     { includeMetadataChanges: true },
     (snapshot) => {
-      const records = snapshot.docs.map((doc) =>
-        normalizeDispatchRecord(doc.id, doc.data() as Record<string, any>)
-      );
-      callback(records, {
-        fromCache: snapshot.metadata.fromCache,
-        hasPendingWrites: snapshot.metadata.hasPendingWrites,
+      deferWhileCollectTyping("records-range", () => {
+        const records = snapshot.docs.map((doc) =>
+          normalizeDispatchRecord(doc.id, doc.data() as Record<string, any>)
+        );
+        callback(records, {
+          fromCache: snapshot.metadata.fromCache,
+          hasPendingWrites: snapshot.metadata.hasPendingWrites,
+        });
       });
     },
     (error) => {
@@ -1210,11 +1229,13 @@ export const subscribeToBouncedByDateRange = (
   return onSnapshot(
     q,
     (snapshot) => {
-      const records = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      } as BouncedRecord));
-      callback(records);
+      deferWhileCollectTyping("bounced-range", () => {
+        const records = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        } as BouncedRecord));
+        callback(records);
+      });
     },
     (error) => {
       if (onError) onError(error);
