@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { format } from "date-fns";
 import { PaymentMethod } from "../types";
 import {
@@ -12,6 +12,7 @@ import {
 import {
   markCollectInputActive,
   markCollectInputIdle,
+  scheduleCollectInputIdle,
 } from "../lib/collectTypingGate";
 
 type CollectValues = {
@@ -25,13 +26,38 @@ type CollectValues = {
 
 type CollectNodes = Record<CollectInputField, HTMLInputElement | null>;
 
+type AmountPreviewStore = {
+  get: () => string;
+  set: (raw: string) => void;
+  subscribe: (listener: () => void) => () => void;
+};
+
 type CollectBridge = {
   session: CollectInputSession;
   accepted: Record<CollectInputField, string>;
   nodes: CollectNodes;
   bases: Record<CollectInputField, string>;
   commit: () => void;
+  onAmount: (raw: string) => void;
 };
+
+function createAmountPreviewStore(initial: string): AmountPreviewStore {
+  let amount = formatAmount(initial);
+  const listeners = new Set<() => void>();
+  return {
+    get: () => amount,
+    set: (raw: string) => {
+      const next = formatAmount(raw);
+      if (next === amount) return;
+      amount = next;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
 
 function digitsOnly(value: string, max?: number) {
   const digits = value.replace(/\D/g, "");
@@ -153,7 +179,7 @@ const BufferedCollectInput = React.memo(function BufferedCollectInput({
       onBlur={() => {
         const session = bridge.current.session;
         if (session.leavingField === field) session.leavingField = null;
-        if (session.composingField === field) session.composingField = null;
+        if (session.composingField === field) return;
         bridge.current.commit();
       }}
       onChange={(event) => {
@@ -171,6 +197,7 @@ const BufferedCollectInput = React.memo(function BufferedCollectInput({
         }
         if (focused && (native.isComposing || native.inputType === "insertCompositionText")) {
           session.composingField = field;
+          if (field === "amount") bridge.current.onAmount(element.value);
           return;
         }
         const decision = decideCollectFieldChange({
@@ -190,10 +217,61 @@ const BufferedCollectInput = React.memo(function BufferedCollectInput({
           return;
         }
         bridge.current.accepted[field] = element.value;
+        if (field === "amount") bridge.current.onAmount(element.value);
       }}
     />
   );
 });
+
+function CollectAmountPreview({
+  mode,
+  originalTotal,
+  currentCollected,
+  store,
+}: {
+  mode: "ADD" | "SET";
+  originalTotal: number;
+  currentCollected: number;
+  store: AmountPreviewStore;
+}) {
+  const amountStr = useSyncExternalStore(store.subscribe, store.get, store.get);
+  const inputNum = amountStr ? parseInt(amountStr.replace(/,/g, ""), 10) : 0;
+  const additionalAmount = mode === "ADD" ? inputNum : inputNum - currentCollected;
+  const newTotalCollected = currentCollected + additionalAmount;
+  const newShortage = additionalCollectShortage({
+    originalTotal,
+    currentCollected,
+    mode,
+    amountStr,
+  });
+
+  return (
+    <div className="px-3 py-2 bg-amber-100/60 border border-amber-200 rounded-xl text-[11px] font-black text-stone-800 flex items-center justify-between">
+      <span>
+        조정 후 총 수금액:{" "}
+        <strong
+          data-collect-preview-total={String(newTotalCollected)}
+          className="text-amber-950 font-black text-xs"
+        >
+          {newTotalCollected.toLocaleString()}원
+        </strong>
+      </span>
+      {newShortage > 0 ? (
+        <span className="text-red-600 font-black bg-red-100 px-2 py-0.5 rounded border border-red-200">
+          ⚠️ 남은 미수: {newShortage.toLocaleString()}원
+        </span>
+      ) : newShortage < 0 ? (
+        <span className="text-blue-600 font-black bg-blue-100 px-2 py-0.5 rounded border border-blue-200">
+          초과 수금 (+{Math.abs(newShortage).toLocaleString()}원)
+        </span>
+      ) : (
+        <span className="text-emerald-700 font-black bg-emerald-100 px-2 py-0.5 rounded border border-emerald-300">
+          전액 완납! 🎉 (모든 항목 수금 완료)
+        </span>
+      )}
+    </div>
+  );
+}
 
 function CollectFormBody({
   estName,
@@ -259,8 +337,12 @@ function CollectFormBody({
       nodes: { date: null, time: null, depositor: null, amount: null },
       bases: { date: "", time: "", depositor: "", amount: "" },
       commit: () => undefined,
+      onAmount: () => undefined,
     };
   }
+  const amountPreview = useRef<AmountPreviewStore>(null);
+  if (!amountPreview.current) amountPreview.current = createAmountPreviewStore(values.amountStr);
+  const amountStore = amountPreview.current;
 
   const readLive = (): CollectValues => {
     const nodes = bridge.current.nodes;
@@ -288,9 +370,11 @@ function CollectFormBody({
     bridge.current.accepted.time = next.collectedTime;
     bridge.current.accepted.depositor = next.depositorName;
     bridge.current.accepted.amount = next.amountStr;
+    amountStore.set(next.amountStr);
     setValues(next);
   };
   bridge.current.commit = commit;
+  bridge.current.onAmount = (raw: string) => amountStore.set(raw);
 
   useEffect(() => {
     if (bridge.current.session.composingField) return;
@@ -324,16 +408,6 @@ function CollectFormBody({
     0,
     openedTotals.current.originalTotal - openedTotals.current.currentCollected,
   );
-  const inputNum = values.amountStr ? parseInt(values.amountStr.replace(/,/g, ""), 10) : 0;
-  const additionalAmount =
-    mode === "ADD" ? inputNum : inputNum - openedTotals.current.currentCollected;
-  const newTotalCollected = openedTotals.current.currentCollected + additionalAmount;
-  const newShortage = additionalCollectShortage({
-    originalTotal: openedTotals.current.originalTotal,
-    currentCollected: openedTotals.current.currentCollected,
-    mode,
-    amountStr: values.amountStr,
-  });
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -382,7 +456,8 @@ function CollectFormBody({
       onBlur={(event) => {
         const next = event.relatedTarget;
         if (next instanceof Node && event.currentTarget.contains(next)) return;
-        markCollectInputIdle();
+        if (bridge.current.session.composingField) return;
+        scheduleCollectInputIdle();
       }}
     >
       <div className="flex items-center justify-between border-b border-amber-200 pb-2">
@@ -576,24 +651,12 @@ function CollectFormBody({
         </div>
       </div>
 
-      <div className="px-3 py-2 bg-amber-100/60 border border-amber-200 rounded-xl text-[11px] font-black text-stone-800 flex items-center justify-between">
-        <span>
-          조정 후 총 수금액: <strong className="text-amber-950 font-black text-xs">{newTotalCollected.toLocaleString()}원</strong>
-        </span>
-        {newShortage > 0 ? (
-          <span className="text-red-600 font-black bg-red-100 px-2 py-0.5 rounded border border-red-200">
-            ⚠️ 남은 미수: {newShortage.toLocaleString()}원
-          </span>
-        ) : newShortage < 0 ? (
-          <span className="text-blue-600 font-black bg-blue-100 px-2 py-0.5 rounded border border-blue-200">
-            초과 수금 (+{Math.abs(newShortage).toLocaleString()}원)
-          </span>
-        ) : (
-          <span className="text-emerald-700 font-black bg-emerald-100 px-2 py-0.5 rounded border border-emerald-300">
-            전액 완납! 🎉 (모든 항목 수금 완료)
-          </span>
-        )}
-      </div>
+      <CollectAmountPreview
+        mode={mode}
+        originalTotal={openedTotals.current.originalTotal}
+        currentCollected={openedTotals.current.currentCollected}
+        store={amountStore}
+      />
 
       <div className="flex gap-2 pt-1">
         <button

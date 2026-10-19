@@ -419,6 +419,119 @@ test("입금자 조합 직후에도 시간 1931의 첫 숫자는 원래 시각�
   }
 });
 
+test("김민준과 1018은 치는 즉시 보이고 목록 변환은 그 사이에 시작하지 않는다", async () => {
+  sessionStorage.clear();
+  markCollectInputIdle();
+  const view = mount({});
+  const applied: string[] = [];
+  let mapped = 0;
+  try {
+    const depositor = field(view.host, "depositor");
+    const date = field(view.host, "date");
+    const previousDate = date.value;
+    assert.equal(previousDate.length, 4);
+    await act(async () => {
+      depositor.focus();
+    });
+
+    for (const partial of ["박", "김", "김민", "김민준"]) {
+      deferWhileCollectTyping("records", () => {
+        mapped += 1;
+        applied.push(partial);
+      });
+      await typeInto(depositor, partial);
+      assert.equal(depositor.value, partial);
+      assert.equal(mapped, 0);
+    }
+
+    await act(async () => {
+      date.focus();
+    });
+    let typed = "";
+    for (const digit of "1018") {
+      typed += digit;
+      const snapshot = typed;
+      deferWhileCollectTyping("all-unpaid", () => {
+        mapped += 1;
+        applied.push(snapshot);
+      });
+      await act(async () => {
+        date.dispatchEvent(new KeyboardEvent("keydown", { key: digit, bubbles: true }));
+      });
+      await typeInto(date, typed);
+      assert.equal(date.value, typed);
+      assert.equal(mapped, 0);
+    }
+    assert.notEqual(date.value, previousDate);
+    assert.equal(depositor.value, "김민준");
+    assert.deepEqual(applied, []);
+    markCollectInputIdle();
+    assert.equal(mapped, 2);
+    assert.deepEqual(applied, ["김민준", "1018"]);
+  } finally {
+    view.unmount();
+    sessionStorage.clear();
+    markCollectInputIdle();
+  }
+});
+
+test("금액을 치는 동안 조정 후 총 수금액이 따라 바뀌고 입금자 칸은 그대로다", async () => {
+  sessionStorage.clear();
+  markCollectInputIdle();
+  const view = mount({ currentCollected: 0, originalTotal: 2000000 });
+  const proto = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+  assert.ok(proto?.get && proto.set);
+  let writes = 0;
+  try {
+    const depositor = field(view.host, "depositor");
+    const amount = field(view.host, "amount");
+    const preview = () =>
+      view.host
+        .querySelector("[data-collect-preview-total]")
+        ?.getAttribute("data-collect-preview-total");
+    await act(async () => {
+      depositor.focus();
+    });
+    await typeInto(depositor, "김민준");
+    assert.equal(preview(), "0");
+
+    Object.defineProperty(HTMLInputElement.prototype, "value", {
+      configurable: true,
+      get() {
+        return proto.get!.call(this);
+      },
+      set(value: string) {
+        if (this === depositor) writes += 1;
+        proto.set!.call(this, value);
+      },
+    });
+
+    await act(async () => {
+      amount.focus();
+    });
+    let typed = "";
+    for (const digit of "1450000") {
+      typed += digit;
+      await act(async () => {
+        amount.dispatchEvent(new KeyboardEvent("keydown", { key: digit, bubbles: true }));
+      });
+      await typeInto(amount, typed);
+      assert.equal(amount.value, typed);
+      assert.equal(preview(), String(Number(typed)));
+      assert.equal(writes, 0);
+    }
+    assert.equal(depositor.value, "김민준");
+    assert.equal(amount.dataset.collectRenders, "1");
+    assert.equal(depositor.dataset.collectRenders, "1");
+    assert.equal(preview(), "1450000");
+  } finally {
+    Object.defineProperty(HTMLInputElement.prototype, "value", proto);
+    view.unmount();
+    sessionStorage.clear();
+    markCollectInputIdle();
+  }
+});
+
 test("1931과 1450000은 치는 즉시 보이고 목록 갱신은 입력이 끝난 뒤에 적용된다", async () => {
   sessionStorage.clear();
   markCollectInputIdle();
@@ -458,6 +571,8 @@ test("1931과 1450000은 치는 즉시 보이고 목록 갱신은 입력이 끝�
     await act(async () => {
       amount.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     });
+    assert.deepEqual(applied, []);
+    markCollectInputIdle();
     assert.deepEqual(applied, ["time:1931", "amount:1450000"]);
   } finally {
     view.unmount();

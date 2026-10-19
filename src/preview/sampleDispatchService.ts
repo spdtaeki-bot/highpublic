@@ -1,3 +1,4 @@
+import { deferWhileCollectTyping } from "../lib/collectTypingGate";
 import type { ActiveChoice, BouncedRecord, DispatchRecord, Staff, StaffType } from "../types";
 import {
   buildSampleRecords,
@@ -45,12 +46,14 @@ const attendanceListeners = new Set<() => void>();
 const bouncedListeners = new Set<() => void>();
 
 function emitAll() {
-  dispatchListeners.forEach((listener) => listener());
-  unpaidListeners.forEach((listener) => listener());
-  staffListeners.forEach((listener) => listener());
-  establishmentListeners.forEach((listener) => listener());
-  attendanceListeners.forEach((listener) => listener());
-  bouncedListeners.forEach((listener) => listener());
+  deferWhileCollectTyping("sample-updates", () => {
+    dispatchListeners.forEach((listener) => listener());
+    unpaidListeners.forEach((listener) => listener());
+    staffListeners.forEach((listener) => listener());
+    establishmentListeners.forEach((listener) => listener());
+    attendanceListeners.forEach((listener) => listener());
+    bouncedListeners.forEach((listener) => listener());
+  });
 }
 
 function isDeleteField(value: unknown): boolean {
