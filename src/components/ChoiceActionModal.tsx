@@ -71,13 +71,14 @@ export function ChoiceActionModal({
     initialEstablishmentName || "",
   );
   const [time, setTime] = useState(
-    initialTime || format(currentTime || new Date(), "HH:mm"),
+    () => initialTime || format(new Date(), "HH:mm"),
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const timeInputRef = useRef<HTMLInputElement>(null);
+  const timeTouchedRef = useRef(false);
 
   // Collect all known establishment names across establishments master, dispatch records, and bounced records
   const allKnownEstablishmentNames = useMemo(() => {
@@ -130,14 +131,19 @@ export function ChoiceActionModal({
   );
 
   useEffect(() => {
-    if (isOpen) {
-      setEstablishmentName(initialEstablishmentName || "");
-      setTime(initialTime || format(currentTime || new Date(), "HH:mm"));
-      setError(null);
-      setIsSubmitting(false);
-      setIsDropdownOpen(false);
+    if (!isOpen) {
+      timeTouchedRef.current = false;
+      return;
     }
-  }, [isOpen, initialEstablishmentName, initialTime, currentTime]);
+    // currentTime은 화면이 꺼지면 과거로 남을 수 있어 기본값으로 쓰지 않는다.
+    setEstablishmentName(initialEstablishmentName || "");
+    if (!timeTouchedRef.current) {
+      setTime(initialTime || format(new Date(), "HH:mm"));
+    }
+    setError(null);
+    setIsSubmitting(false);
+    setIsDropdownOpen(false);
+  }, [isOpen, initialEstablishmentName, initialTime]);
 
   if (!isOpen) return null;
 
@@ -149,6 +155,7 @@ export function ChoiceActionModal({
     if (digits.length >= 3) {
       formatted = digits.slice(0, 2) + ":" + digits.slice(2);
     }
+    timeTouchedRef.current = true;
     setTime(formatted);
   };
 
@@ -178,8 +185,10 @@ export function ChoiceActionModal({
       const d = new Date();
       d.setHours(h, m, 0, 0);
       const newDate = addMinutes(d, deltaMinutes);
+      timeTouchedRef.current = true;
       setTime(format(newDate, "HH:mm"));
     } catch {
+      timeTouchedRef.current = true;
       setTime(format(new Date(), "HH:mm"));
     }
   };
@@ -484,9 +493,10 @@ export function ChoiceActionModal({
               </label>
               <button
                 type="button"
-                onClick={() =>
-                  setTime(format(currentTime || new Date(), "HH:mm"))
-                }
+                onClick={() => {
+                  timeTouchedRef.current = true;
+                  setTime(format(new Date(), "HH:mm"));
+                }}
                 className={cn(
                   "text-[10px] font-black px-2 py-0.5 rounded transition-all cursor-pointer",
                   isProgress

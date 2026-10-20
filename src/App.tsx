@@ -845,6 +845,8 @@ export default function App() {
 
   useEffect(() => {
     if (!isPageVisible) return;
+    // 화면이 꺼져 있는 동안 interval이 멈추므로, 다시 보이면 바로 시각을 맞춘다.
+    setCurrentTime(new Date());
     const timer = setInterval(() => setCurrentTime(new Date()), 60000);
     return () => clearInterval(timer);
   }, [isPageVisible]);
@@ -1283,7 +1285,7 @@ export default function App() {
       mode: "PROGRESS",
       staffNames,
       initialEstablishmentName: initialEst,
-      initialTime: format(currentTime || new Date(), "HH:mm"),
+      initialTime: format(new Date(), "HH:mm"),
       choiceEntryTime: initialChoiceTime,
     });
   };
@@ -1333,7 +1335,7 @@ export default function App() {
           mode: "BOUNCE",
           staffNames: staffWithChoice,
           initialEstablishmentName: initialEst,
-          initialTime: format(currentTime || new Date(), "HH:mm"),
+          initialTime: format(new Date(), "HH:mm"),
           choiceEntryTime: initialChoiceTime,
         });
         return;
@@ -4640,7 +4642,6 @@ export default function App() {
                     allStaff={staff}
                     establishments={establishments}
                     checkInTimes={checkInTimes}
-                    currentTime={currentTime}
                     onAlert={(msg) => setAlertConfig({ message: msg })}
                   />
                 )}
@@ -4736,7 +4737,6 @@ export default function App() {
                     }}
                     staffNames={choiceModalStaff}
                     establishments={establishments}
-                    currentTime={currentTime}
                     onConfirm={handleConfirmChoiceModal}
                   />
                 )}
@@ -11979,7 +11979,6 @@ function DispatchFormModal({
   allStaff,
   establishments,
   checkInTimes,
-  currentTime,
   onAlert,
 }: {
   onClose: () => void;
@@ -11992,7 +11991,6 @@ function DispatchFormModal({
   allStaff?: Staff[];
   establishments: { id: string; name: string }[];
   checkInTimes: Record<string, any>;
-  currentTime: Date;
   onAlert: (message: string) => void;
 }) {
   const targetDate = editRecord?.date || selectedDate;
@@ -12031,38 +12029,41 @@ function DispatchFormModal({
     };
   }, [editRecord, allRecords, preSelectedStaffNames, workingStaff]);
 
-  const [formData, setFormData] = useState({
-    staffNames: initialStaffNames,
-    establishmentName: editRecord?.establishmentName || "",
-    systemType: editRecord?.systemType || ("TABLE" as SystemType),
-    startTime: editRecord
-      ? format(
-          editRecord.startTime.toDate
-            ? editRecord.startTime.toDate()
-            : new Date(editRecord.startTime),
-          "HH:mm",
-        )
-      : format(currentTime, "HH:mm"),
-    endTime: editRecord
-      ? format(
-          editRecord.endTime.toDate
-            ? editRecord.endTime.toDate()
-            : new Date(editRecord.endTime),
-          "HH:mm",
-        )
-      : format(currentTime, "HH:mm"),
-    paymentMethod: editRecord?.paymentMethod || ("UNPAID" as PaymentMethod),
-    isBanti: editRecord?.isBanti || false,
-    isNoBanti: editRecord?.isNoBanti || false,
-    isStaffPaid: editRecord?.isStaffPaid || false,
-    staffPaymentMethod:
-      editRecord?.staffPaymentMethod || ("CASH" as "CASH" | "TRANSFER"),
-    tip: editRecord?.tip || 0,
-    isPass: editRecord?.isPass || false,
-    isRoundUp: editRecord?.isRoundUp || false,
-    isRoundDownHalf: editRecord?.isRoundDownHalf || false,
-    isRoundDownFull: editRecord?.isRoundDownFull || false,
-    extraFullUnits: editRecord?.extraFullUnits || 0,
+  const [formData, setFormData] = useState(() => {
+    const openedAt = format(new Date(), "HH:mm");
+    return {
+      staffNames: initialStaffNames,
+      establishmentName: editRecord?.establishmentName || "",
+      systemType: editRecord?.systemType || ("TABLE" as SystemType),
+      startTime: editRecord
+        ? format(
+            editRecord.startTime.toDate
+              ? editRecord.startTime.toDate()
+              : new Date(editRecord.startTime),
+            "HH:mm",
+          )
+        : openedAt,
+      endTime: editRecord
+        ? format(
+            editRecord.endTime.toDate
+              ? editRecord.endTime.toDate()
+              : new Date(editRecord.endTime),
+            "HH:mm",
+          )
+        : openedAt,
+      paymentMethod: editRecord?.paymentMethod || ("UNPAID" as PaymentMethod),
+      isBanti: editRecord?.isBanti || false,
+      isNoBanti: editRecord?.isNoBanti || false,
+      isStaffPaid: editRecord?.isStaffPaid || false,
+      staffPaymentMethod:
+        editRecord?.staffPaymentMethod || ("CASH" as "CASH" | "TRANSFER"),
+      tip: editRecord?.tip || 0,
+      isPass: editRecord?.isPass || false,
+      isRoundUp: editRecord?.isRoundUp || false,
+      isRoundDownHalf: editRecord?.isRoundDownHalf || false,
+      isRoundDownFull: editRecord?.isRoundDownFull || false,
+      extraFullUnits: editRecord?.extraFullUnits || 0,
+    };
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submissionLockRef = useRef(false);

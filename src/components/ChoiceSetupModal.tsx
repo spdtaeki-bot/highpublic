@@ -9,7 +9,6 @@ interface ChoiceSetupModalProps {
   onClose: () => void;
   staffNames: string[];
   establishments: (string | { name: string })[];
-  currentTime?: Date;
   onConfirm: (establishmentName: string, choiceTime: string) => void | Promise<void>;
 }
 
@@ -18,16 +17,14 @@ export function ChoiceSetupModal({
   onClose,
   staffNames,
   establishments,
-  currentTime,
   onConfirm,
 }: ChoiceSetupModalProps) {
   const [establishmentName, setEstablishmentName] = useState("");
-  const [choiceTime, setChoiceTime] = useState(
-    format(currentTime || new Date(), "HH:mm"),
-  );
+  const [choiceTime, setChoiceTime] = useState(() => format(new Date(), "HH:mm"));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const timeTouchedRef = useRef(false);
 
   // Normalize establishment names
   const establishmentList = useMemo(() => {
@@ -45,16 +42,22 @@ export function ChoiceSetupModal({
   }, [establishmentList, establishmentName]);
 
   useEffect(() => {
-    if (isOpen) {
-      setChoiceTime(format(currentTime || new Date(), "HH:mm"));
-      setEstablishmentName("");
-      setError(null);
-      setIsSubmitting(false);
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 100);
+    if (!isOpen) {
+      timeTouchedRef.current = false;
+      return;
     }
-  }, [isOpen, currentTime]);
+    // 여는 순간의 실제 시각만 넣는다. 사용자가 고친 뒤에는 시계가 갱신돼도 유지한다.
+    if (!timeTouchedRef.current) {
+      setChoiceTime(format(new Date(), "HH:mm"));
+    }
+    setEstablishmentName("");
+    setError(null);
+    setIsSubmitting(false);
+    const focusTimer = setTimeout(() => {
+      inputRef.current?.focus();
+    }, 100);
+    return () => clearTimeout(focusTimer);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -96,8 +99,10 @@ export function ChoiceSetupModal({
       totalMins = totalMins % (24 * 60);
       const newH = String(Math.floor(totalMins / 60)).padStart(2, "0");
       const newM = String(totalMins % 60).padStart(2, "0");
+      timeTouchedRef.current = true;
       setChoiceTime(`${newH}:${newM}`);
     } catch {
+      timeTouchedRef.current = true;
       setChoiceTime(format(new Date(), "HH:mm"));
     }
   };
@@ -242,7 +247,10 @@ export function ChoiceSetupModal({
               </label>
               <button
                 type="button"
-                onClick={() => setChoiceTime(format(new Date(), "HH:mm"))}
+                onClick={() => {
+                  timeTouchedRef.current = true;
+                  setChoiceTime(format(new Date(), "HH:mm"));
+                }}
                 className="text-[10px] font-black text-purple-600 hover:text-purple-800 px-1.5 py-0.5 rounded bg-purple-50 hover:bg-purple-100 transition-all cursor-pointer"
               >
                 현시간 적용
@@ -252,7 +260,10 @@ export function ChoiceSetupModal({
               <input
                 type="time"
                 value={choiceTime}
-                onChange={(e) => setChoiceTime(e.target.value)}
+                onChange={(e) => {
+                  timeTouchedRef.current = true;
+                  setChoiceTime(e.target.value);
+                }}
                 className="flex-1 bg-stone-50 border border-stone-200 rounded-2xl px-3.5 py-3 text-sm font-black text-stone-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-purple-600/30 focus:border-purple-600 transition-all font-mono"
               />
               <div className="flex items-center gap-1">
