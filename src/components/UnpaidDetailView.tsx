@@ -744,6 +744,11 @@ export function UnpaidDetailView({
 
   const handleApplyBulkCollections = useCallback(
     async (operations: BulkCollectionOperation[]) => {
+      const expandedBusinessDates = new Set(
+        operations
+          .map((operation) => operation.businessDate)
+          .filter((date) => expandedDates[date] ?? allExpanded),
+      );
       const saveResult = await onApplyBulkCollections(operations);
       const appliedIds = new Set(saveResult.appliedOperationIds);
       if (appliedIds.size === 0) return saveResult;
@@ -786,9 +791,23 @@ export function UnpaidDetailView({
           return Array.from(merged.values());
         });
       }
+      if (expandedBusinessDates.size > 0) {
+        setExpandedDates((current) => {
+          const next = { ...current };
+          expandedBusinessDates.forEach((date) => {
+            next[date] = true;
+          });
+          return next;
+        });
+      }
       return saveResult;
     },
-    [combinedRecords, onApplyBulkCollections],
+    [
+      allExpanded,
+      combinedRecords,
+      expandedDates,
+      onApplyBulkCollections,
+    ],
   );
 
   const activeBatchCollection = batchCollecting

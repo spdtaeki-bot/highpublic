@@ -68,9 +68,37 @@ export function createBulkCollectionOperationId(input: {
 export function collectionOperationAlreadyExists(
   records: DispatchRecord[],
   operationId: string,
+  operation?: Pick<
+    BulkCollectionOperation,
+    "collectedDate" | "time" | "depositorName" | "amount" | "method"
+  >,
 ) {
   return records.some((record) =>
-    record.collectionHistory?.some((entry) => entry.operationId === operationId),
+    record.collectionHistory?.some((entry) => {
+      if (entry.operationId === operationId) return true;
+      if (!operation || entry.isShared !== true || !entry.collectedAt) return false;
+      const collectedAt = entry.collectedAt.toDate
+        ? entry.collectedAt.toDate()
+        : new Date(entry.collectedAt);
+      if (Number.isNaN(collectedAt.getTime())) return false;
+      const entryDate = [
+        collectedAt.getFullYear(),
+        String(collectedAt.getMonth() + 1).padStart(2, "0"),
+        String(collectedAt.getDate()).padStart(2, "0"),
+      ].join("-");
+      const entryTime = [
+        String(collectedAt.getHours()).padStart(2, "0"),
+        String(collectedAt.getMinutes()).padStart(2, "0"),
+      ].join("");
+      return (
+        entryDate === operation.collectedDate &&
+        entryTime === operation.time &&
+        normalizeText(entry.depositorName || "").toLocaleLowerCase("ko") ===
+          normalizeText(operation.depositorName).toLocaleLowerCase("ko") &&
+        (entry.amount || 0) === operation.amount &&
+        entry.paymentMethod === operation.method
+      );
+    }),
   );
 }
 

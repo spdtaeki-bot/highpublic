@@ -283,7 +283,13 @@ export const applyBulkCollectionsAtomically = async (
     ) {
       throw new Error(`[${operation.establishmentName}] 저장 대상이 변경되었습니다.`);
     }
-    if (collectionOperationAlreadyExists(targetRecords, operation.operationId)) {
+    if (
+      collectionOperationAlreadyExists(
+        targetRecords,
+        operation.operationId,
+        operation,
+      )
+    ) {
       skippedOperationIds.push(operation.operationId);
       continue;
     }

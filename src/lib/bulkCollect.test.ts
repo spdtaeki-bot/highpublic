@@ -90,3 +90,46 @@ test("operationId가 공용 수금 이력 전체에 저장되어 재시도를 �
     true,
   );
 });
+
+test("입금자가 비어 있고 operationId가 없어도 날짜·시간·금액·수단으로 중복을 찾는다", () => {
+  const existing = record("legacy-bulk");
+  existing.collectionHistory = [{
+    collectedAt: Timestamp.fromDate(new Date(2026, 9, 15, 13, 49, 0, 0)),
+    amount: 10000,
+    paymentMethod: "TRANSFER",
+    isShared: true,
+  }];
+  const operation = {
+    operationId: createBulkCollectionOperationId({
+      targetKey: "2026-10-15___리치",
+      collectedDate: "2026-10-15",
+      time: "1349",
+      depositorName: "",
+      amount: 10000,
+      method: "TRANSFER",
+    }),
+    targetKey: "2026-10-15___리치",
+    businessDate: "2026-10-15",
+    collectedDate: "2026-10-15",
+    establishmentName: "리치",
+    recordIds: ["legacy-bulk"],
+    depositorName: "",
+    amount: 10000,
+    time: "1349",
+    method: "TRANSFER" as const,
+    collectedAt: new Date(2026, 9, 15, 13, 49, 0, 0),
+  };
+
+  assert.equal(
+    collectionOperationAlreadyExists([existing], operation.operationId, operation),
+    true,
+  );
+  assert.equal(
+    collectionOperationAlreadyExists(
+      [existing],
+      operation.operationId,
+      { ...operation, collectedDate: "2026-10-16" },
+    ),
+    false,
+  );
+});

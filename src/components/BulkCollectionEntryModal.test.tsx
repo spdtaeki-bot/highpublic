@@ -178,6 +178,73 @@ test("입력 중에는 행과 모달을 다시 그리지 않고 IME 조합 완�
   }
 });
 
+test("Tab과 Shift+Tab 포커스가 일괄 입력 모달 안에서만 순환한다", async () => {
+  const outside = document.createElement("input");
+  outside.setAttribute("aria-label", "하단 직원 검색");
+  document.body.appendChild(outside);
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <BulkCollectionEntryModal
+        targets={[{
+          key: "2026-10-20___미술관",
+          businessDate: "2026-10-20",
+          establishmentName: "미술관",
+          shortage: 300000,
+          records: [record()],
+        }]}
+        defaultCollectedDate="2026-10-20"
+        onSave={async () => ({ appliedOperationIds: [], skippedOperationIds: [] })}
+        onClose={() => {}}
+      />,
+    );
+  });
+
+  try {
+    const content = host.querySelector<HTMLElement>("[data-bulk-modal-content]");
+    const amount = host.querySelector<HTMLInputElement>('[aria-label="1행 금액"]');
+    const time = host.querySelector<HTMLInputElement>('[aria-label="1행 시간"]');
+    assert.ok(content && amount && time);
+    const focusable = Array.from(
+      content.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    assert.ok(focusable.length > 2);
+
+    amount.focus();
+    amount.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    }));
+    assert.equal(document.activeElement, time);
+
+    focusable[focusable.length - 1].focus();
+    focusable[focusable.length - 1].dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    }));
+    assert.equal(document.activeElement, focusable[0]);
+    assert.notEqual(document.activeElement, outside);
+
+    focusable[0].dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Tab",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    }));
+    assert.equal(document.activeElement, focusable[focusable.length - 1]);
+  } finally {
+    act(() => root.unmount());
+    host.remove();
+    outside.remove();
+  }
+});
+
 test("중복 행을 모두 표시하고 중복이 아닌 행만 저장한다", async () => {
   const host = document.createElement("div");
   document.body.appendChild(host);

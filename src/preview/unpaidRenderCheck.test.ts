@@ -197,3 +197,110 @@ test("일괄 저장 뒤 카드 순서와 드롭다운의 최신 잔여 금액을
     host.remove();
   }
 });
+
+test("공란 입금자 중복 두 건을 표시하고 신규 한 건만 저장하며 날짜를 펼쳐 둔다", async () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const saved: Array<Array<{ establishmentName: string }>> = [];
+  const records = [
+    unpaidRecord("rich-duplicate", "리치", 150000),
+    unpaidRecord("hong-duplicate", "홍콩", 150000),
+    unpaidRecord("dopamine-new", "도파민", 150000),
+  ];
+  await act(async () => {
+    root.render(
+      React.createElement(UnpaidDetailView, {
+        records: [],
+        allUnpaidRecords: records,
+        staff: [],
+        selectedDate: SAMPLE_DATE,
+        onUpdateRecord: async () => {},
+        onUpdateRecordsAtomically: async () => {},
+        onApplyBulkCollections: async (operations) => {
+          saved.push(operations);
+          return {
+            appliedOperationIds: operations.map((operation) => operation.operationId),
+            skippedOperationIds: [],
+          };
+        },
+      }),
+    );
+  });
+
+  const fillRow = (
+    row: number,
+    establishmentName: string,
+  ) => {
+    setValue(
+      host.querySelector<HTMLSelectElement>(`[aria-label="${row}행 업소"]`)!,
+      `${SAMPLE_DATE}___${establishmentName}`,
+    );
+    setValue(
+      host.querySelector<HTMLInputElement>(`[aria-label="${row}행 날짜"]`)!,
+      SAMPLE_DATE,
+    );
+    setValue(
+      host.querySelector<HTMLInputElement>(`[aria-label="${row}행 금액"]`)!,
+      "10000",
+    );
+    setValue(
+      host.querySelector<HTMLInputElement>(`[aria-label="${row}행 시간"]`)!,
+      "1349",
+    );
+  };
+
+  try {
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-open-bulk-collection]")?.click();
+    });
+    await act(async () => {
+      fillRow(1, "리치");
+      fillRow(2, "홍콩");
+      host.querySelector<HTMLButtonElement>("[data-bulk-preview]")?.click();
+    });
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-bulk-save]")?.click();
+    });
+    assert.deepEqual(
+      saved[0].map((operation) => operation.establishmentName).sort(),
+      ["리치", "홍콩"].sort(),
+    );
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[aria-label="일괄 수금 입력 창 닫기"]')?.click();
+    });
+    const dateGroup = host.querySelector<HTMLElement>(`#unpaid-date-card-${SAMPLE_DATE}`);
+    assert.ok(dateGroup);
+    assert.equal(
+      dateGroup.querySelectorAll(`[id^="unpaid-est-card-${SAMPLE_DATE}"]`).length,
+      3,
+    );
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-open-bulk-collection]")?.click();
+    });
+    await act(async () => {
+      fillRow(1, "리치");
+      fillRow(2, "홍콩");
+      fillRow(3, "도파민");
+      host.querySelector<HTMLButtonElement>("[data-bulk-preview]")?.click();
+    });
+
+    assert.equal(host.querySelectorAll('[data-bulk-preview-row="duplicate"]').length, 2);
+    assert.equal(host.querySelectorAll('[data-bulk-preview-row="pending"]').length, 1);
+    assert.match(host.textContent || "", /중복 제외하고 1건 저장/);
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-bulk-save]")?.click();
+    });
+    assert.equal(saved.length, 2);
+    assert.deepEqual(
+      saved[1].map((operation) => operation.establishmentName),
+      ["도파민"],
+    );
+  } finally {
+    act(() => root.unmount());
+    host.remove();
+  }
+});

@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useRef, useState } from "react";
+import React, { memo, useCallback, useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
 import { Plus, Trash2, X } from "lucide-react";
 import {
@@ -156,6 +156,7 @@ function BulkCollectionEntryModalComponent({
   onClose: () => void;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const renderCount = useRef(0);
   renderCount.current += 1;
   const nextRowId = useRef(4);
@@ -169,6 +170,31 @@ function BulkCollectionEntryModalComponent({
     markCollectInputActive();
     return () => markCollectInputIdle();
   }, []);
+
+  const trapTabFocus = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== "Tab") return;
+      const content = contentRef.current;
+      if (!content) return;
+      const focusable = Array.from(
+        content.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusable.length === 0) return;
+      event.preventDefault();
+      const currentIndex = focusable.indexOf(content.ownerDocument.activeElement as HTMLElement);
+      const nextIndex = event.shiftKey
+        ? currentIndex <= 0
+          ? focusable.length - 1
+          : currentIndex - 1
+        : currentIndex < 0 || currentIndex === focusable.length - 1
+          ? 0
+          : currentIndex + 1;
+      focusable[nextIndex]?.focus();
+    },
+    [],
+  );
 
   const buildPreview = () => {
     const form = formRef.current;
@@ -239,7 +265,9 @@ function BulkCollectionEntryModalComponent({
       let duplicateReason: string | undefined;
       if (seenOperationIds.has(operationId)) {
         duplicateReason = "입력 내용 안에서 앞 행과 중복";
-      } else if (collectionOperationAlreadyExists(target.records, operationId)) {
+      } else if (
+        collectionOperationAlreadyExists(target.records, operationId, operation)
+      ) {
         duplicateReason = "이미 저장된 수금";
       }
       seenOperationIds.add(operationId);
@@ -296,11 +324,17 @@ function BulkCollectionEntryModalComponent({
     >
       <button
         type="button"
+        tabIndex={-1}
         aria-label="일괄 수금 입력 창 닫기"
         className="absolute inset-0 bg-stone-900/60 backdrop-blur-xs cursor-default"
         onClick={onClose}
       />
-      <div className="relative z-10 flex max-h-[calc(100dvh-1.5rem)] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+      <div
+        ref={contentRef}
+        onKeyDown={trapTabFocus}
+        className="relative z-10 flex max-h-[calc(100dvh-1.5rem)] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+        data-bulk-modal-content
+      >
         <div className="flex items-center justify-between border-b border-stone-200 px-4 py-3 sm:px-5">
           <div>
             <h3 className="text-base font-black text-stone-900">일괄 수금 입력</h3>
