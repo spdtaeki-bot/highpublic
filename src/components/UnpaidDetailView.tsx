@@ -43,6 +43,7 @@ import {
   isOnSiteHistoryEntry,
 } from "../lib/utils";
 import { BatchCollectForm } from "./BatchCollectForm";
+import { BulkCollectionEntryModal } from "./BulkCollectionEntryModal";
 import { EstablishmentAdditionalCollectForm } from "./EstablishmentAdditionalCollectForm";
 import { CollectionRoundBadges } from "./CollectionRoundBadges";
 import { SearchField } from "./SearchField";
@@ -52,6 +53,11 @@ import {
   overlayRecordPatches,
   type RecordPatch,
 } from "../lib/optimisticCollect";
+import type {
+  BulkCollectionOperation,
+  BulkCollectionSaveResult,
+  BulkCollectTarget,
+} from "../lib/bulkCollect";
 
 interface AdditionalCollectionRequest {
   dateKey: string;
@@ -386,6 +392,9 @@ interface UnpaidDetailViewProps {
   onUpdateRecordsAtomically: (
     updates: Array<{ id: string; updates: Partial<DispatchRecord> }>,
   ) => Promise<void>;
+  onApplyBulkCollections: (
+    operations: BulkCollectionOperation[],
+  ) => Promise<BulkCollectionSaveResult>;
   onEditRecord?: (record: DispatchRecord) => void;
   onViewDispatchRecord?: (record: DispatchRecord) => void;
   focusRecordIds?: string[] | null;
@@ -399,6 +408,7 @@ export function UnpaidDetailView({
   selectedDate,
   onUpdateRecord,
   onUpdateRecordsAtomically,
+  onApplyBulkCollections,
   onEditRecord,
   onViewDispatchRecord,
   focusRecordIds,
@@ -444,6 +454,7 @@ export function UnpaidDetailView({
     estName: string;
     method: PaymentMethod;
   } | null>(null);
+  const [isBulkCollectionOpen, setIsBulkCollectionOpen] = useState(false);
 
   const [establishmentHistoryModal, setEstablishmentHistoryModal] = useState<{
     estName: string;
@@ -698,6 +709,27 @@ export function UnpaidDetailView({
 
     return rawGroups;
   }, [combinedRecords]);
+
+  const bulkCollectTargets = useMemo(() => {
+    const targets: BulkCollectTarget[] = [];
+    Object.entries(dateEstablishmentGroups).forEach(([businessDate, establishments]) => {
+      Object.entries(establishments).forEach(([establishmentName, establishment]) => {
+        if (establishment.unpaidAmount <= 0) return;
+        targets.push({
+          key: `${businessDate}___${establishmentName}`,
+          businessDate,
+          establishmentName,
+          shortage: establishment.unpaidAmount,
+          records: establishment.records,
+        });
+      });
+    });
+    return targets.sort(
+      (left, right) =>
+        right.businessDate.localeCompare(left.businessDate) ||
+        left.establishmentName.localeCompare(right.establishmentName, "ko"),
+    );
+  }, [dateEstablishmentGroups]);
 
   const activeBatchCollection = batchCollecting
     ? dateEstablishmentGroups[batchCollecting.dateKey]?.[
@@ -1089,25 +1121,27 @@ export function UnpaidDetailView({
         isShared: true,
       };
 
-      // 미수(UNPAID) 기록만 대상. 이미 현장 수금된 기록은 절대 건드리지 않는다.
-      const updatePromises = unpaidRecords.map(async (r) => {
-        const updates = {
-          paymentMethod: method,
-          collectedAt: newBatchTimestamp,
-          additionalCollectedAt: null,
-          collectionHistory: [newEstEntry],
-          isPass: isPass,
-          isDispatchBoxCollection: false,
-          depositorName: depositorName || null,
-          collectedAmount: undefined,
-        };
-
-        if (r.id) {
-          await applyRecordUpdate(r.id, updates as any);
-        }
+      // 미수(UNPAID) 기록만 대상. 여러 updateDoc을 동시에 쏘지 않고 한 배치로 저장해
+      // 스냅샷/렌더 반복과 Firestore 다중 탭 큐 경합을 한 번으로 제한한다.
+      const updates = unpaidRecords.flatMap((record) => {
+        if (!record.id) return [];
+        return [
+          {
+            id: record.id,
+            updates: {
+              paymentMethod: method,
+              collectedAt: newBatchTimestamp,
+              additionalCollectedAt: null,
+              collectionHistory: [newEstEntry],
+              isPass: isPass,
+              isDispatchBoxCollection: false,
+              depositorName: depositorName || null,
+              collectedAmount: undefined,
+            } as Partial<DispatchRecord>,
+          },
+        ];
       });
-
-      await Promise.all(updatePromises);
+      await onUpdateRecordsAtomically(updates);
       setBatchCollecting(null);
     } catch (e) {
       console.error("일괄 수금 처리 오류:", e);
@@ -1491,6 +1525,16 @@ export function UnpaidDetailView({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsBulkCollectionOpen(true)}
+              disabled={bulkCollectTargets.length === 0}
+              className="px-3 py-2 bg-amber-900 hover:bg-amber-950 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap active:scale-95 disabled:opacity-40"
+              data-open-bulk-collection
+            >
+              <Coins className="w-3.5 h-3.5" />
+              <span>일괄 수금 입력</span>
+            </button>
             <button
               onClick={handleToggleAllExpand}
               className="px-3 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap active:scale-95"
@@ -2960,6 +3004,14 @@ export function UnpaidDetailView({
               />
             </motion.div>
           </div>
+        )}
+
+        {isBulkCollectionOpen && (
+          <BulkCollectionEntryModal
+            targets={bulkCollectTargets}
+            onSave={onApplyBulkCollections}
+            onClose={() => setIsBulkCollectionOpen(false)}
+          />
         )}
 
         <AdditionalCollectionModal

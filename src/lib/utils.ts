@@ -383,6 +383,8 @@ export interface EstablishmentAdditionalCollectInput {
   /** 양수: 추가 수금, 음수: 차감(조정) */
   additionalAmount: number;
   depositorName?: string;
+  /** 일괄 수금의 다중 탭/재시도 중복 방지 키 */
+  operationId?: string;
   /** Firestore Timestamp */
   collectedAt: any;
 }
@@ -408,7 +410,7 @@ export function buildEstablishmentAdditionalCollectUpdates(
   records: DispatchRecord[],
   input: EstablishmentAdditionalCollectInput,
 ): EstablishmentAdditionalCollectResult {
-  const { method, additionalAmount, depositorName, collectedAt } = input;
+  const { method, additionalAmount, depositorName, operationId, collectedAt } = input;
   if (!records || records.length === 0) return { updates: [] };
   if (!additionalAmount || isNaN(additionalAmount) || additionalAmount === 0) {
     return { updates: [] };
@@ -478,6 +480,7 @@ export function buildEstablishmentAdditionalCollectUpdates(
       amount: additionalAmount,
       paymentMethod: method,
       ...(depositorName ? { depositorName } : {}),
+      ...(operationId ? { operationId } : {}),
       note:
         baseShared.length === 0 && nextRoundNum === 1
           ? "1차 수금"

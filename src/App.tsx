@@ -88,6 +88,7 @@ import {
   addDispatch,
   updateDispatch,
   updateDispatchesAtomically,
+  applyBulkCollectionsAtomically,
   subscribeToDispatches,
   subscribeToAllUnpaidDispatches,
   subscribeToUnpaidStaffDispatches,
@@ -2096,7 +2097,7 @@ export default function App() {
 
     const keepAlive = setInterval(pingServer, 60000);
     return () => clearInterval(keepAlive);
-  }, []);
+  }, [isPageVisible]);
 
   const dailyCollectionSummary = useMemo(
     () => calculateDailyCollectionSummary(records),
@@ -4473,6 +4474,7 @@ export default function App() {
                           await updateDispatch(id, updates as any);
                         }}
                         onUpdateRecordsAtomically={updateDispatchesAtomically}
+                        onApplyBulkCollections={applyBulkCollectionsAtomically}
                         onEditRecord={(record) => setEditingRecord(record)}
                         onViewDispatchRecord={handleViewDispatchRecord}
                         focusRecordIds={pendingUnpaidRecordIds}

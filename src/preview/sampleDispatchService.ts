@@ -1,4 +1,13 @@
 import { deferWhileCollectTyping } from "../lib/collectTypingGate";
+import {
+  collectionOperationAlreadyExists,
+  type BulkCollectionOperation,
+  type BulkCollectionSaveResult,
+} from "../lib/bulkCollect";
+import {
+  buildEstablishmentAdditionalCollectUpdates,
+  getRecordBusinessDate,
+} from "../lib/utils";
 import type { ActiveChoice, BouncedRecord, DispatchRecord, Staff, StaffType } from "../types";
 import {
   buildSampleRecords,
@@ -251,6 +260,54 @@ export const updateDispatchesAtomically = async (
     }
   });
   emitAll();
+};
+
+export const applyBulkCollectionsAtomically = async (
+  operations: BulkCollectionOperation[],
+): Promise<BulkCollectionSaveResult> => {
+  const appliedOperationIds: string[] = [];
+  const skippedOperationIds: string[] = [];
+
+  for (const operation of operations) {
+    const targetRecords = operation.recordIds.flatMap((id) => {
+      const record = records.find((item) => item.id === id);
+      return record ? [record] : [];
+    });
+    if (
+      targetRecords.length !== operation.recordIds.length ||
+      targetRecords.some(
+        (record) =>
+          record.establishmentName !== operation.establishmentName ||
+          getRecordBusinessDate(record) !== operation.businessDate,
+      )
+    ) {
+      throw new Error(`[${operation.establishmentName}] 저장 대상이 변경되었습니다.`);
+    }
+    if (collectionOperationAlreadyExists(targetRecords, operation.operationId)) {
+      skippedOperationIds.push(operation.operationId);
+      continue;
+    }
+
+    const { updates, error } = buildEstablishmentAdditionalCollectUpdates(
+      targetRecords,
+      {
+        method: operation.method,
+        additionalAmount: operation.amount,
+        depositorName: operation.depositorName,
+        operationId: operation.operationId,
+        collectedAt: previewStamp(operation.collectedAt.toISOString()),
+      },
+    );
+    if (error) throw new Error(`[${operation.establishmentName}] ${error}`);
+    updates.forEach(({ id, updates: patch }) => {
+      const record = records.find((item) => item.id === id);
+      if (record) applyPatch(record as unknown as Record<string, unknown>, patch);
+    });
+    appliedOperationIds.push(operation.operationId);
+  }
+
+  emitAll();
+  return { appliedOperationIds, skippedOperationIds };
 };
 
 export const payUnpaidDispatches = async (

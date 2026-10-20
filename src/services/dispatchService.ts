@@ -22,6 +22,15 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { deferWhileCollectTyping } from '../lib/collectTypingGate';
+import type {
+  BulkCollectionOperation,
+  BulkCollectionSaveResult,
+} from '../lib/bulkCollect';
+import { collectionOperationAlreadyExists } from '../lib/bulkCollect';
+import {
+  buildEstablishmentAdditionalCollectUpdates,
+  getRecordBusinessDate,
+} from '../lib/utils';
 import { DispatchRecord, BouncedRecord, SYSTEM_RATES, COMMISSION_RATE, SystemType, StaffType, ActiveChoice } from '../types';
 
 const COLLECTION_NAME = 'dispatches';
@@ -974,6 +983,109 @@ export const updateDispatchesAtomically = async (
       );
     });
     await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, COLLECTION_NAME);
+  }
+};
+
+/**
+ * 여러 업소 수금을 한 트랜잭션에서 저장한다.
+ *
+ * 트랜잭션 안에서 최신 문서를 다시 읽고 operationId를 확인하므로 저장 버튼 재클릭,
+ * 응답 유실 뒤 재시도, 다른 탭의 동시 저장도 같은 수금 이력을 두 번 추가하지 않는다.
+ */
+export const applyBulkCollectionsAtomically = async (
+  operations: BulkCollectionOperation[],
+): Promise<BulkCollectionSaveResult> => {
+  if (operations.length === 0) {
+    return { appliedOperationIds: [], skippedOperationIds: [] };
+  }
+  if (operations.length > 50) {
+    throw new Error('일괄 수금은 한 번에 50건까지 저장할 수 있습니다.');
+  }
+
+  const recordIds = Array.from(
+    new Set(operations.flatMap((operation) => operation.recordIds).filter(Boolean)),
+  );
+  if (recordIds.length > 450) {
+    throw new Error('한 번에 변경할 파견 기록이 너무 많습니다. 수금 행을 나누어 저장해 주세요.');
+  }
+
+  try {
+    return await runTransaction(db, async (transaction) => {
+      const refs = new Map(
+        recordIds.map((id) => [id, doc(db, COLLECTION_NAME, id)]),
+      );
+      const snapshots = await Promise.all(
+        recordIds.map((id) => transaction.get(refs.get(id)!)),
+      );
+      const current = new Map<string, DispatchRecord>();
+      snapshots.forEach((snapshot, index) => {
+        if (snapshot.exists()) {
+          current.set(
+            recordIds[index],
+            normalizeDispatchRecord(snapshot.id, snapshot.data()),
+          );
+        }
+      });
+
+      const pendingUpdates = new Map<string, Partial<DispatchRecord>>();
+      const appliedOperationIds: string[] = [];
+      const skippedOperationIds: string[] = [];
+
+      for (const operation of operations) {
+        const targetRecords = operation.recordIds.flatMap((id) => {
+          const record = current.get(id);
+          return record ? [record] : [];
+        });
+        if (targetRecords.length !== operation.recordIds.length) {
+          throw new Error(`[${operation.establishmentName}] 저장할 원본 기록을 찾지 못했습니다.`);
+        }
+        if (
+          targetRecords.some(
+            (record) =>
+              record.establishmentName !== operation.establishmentName ||
+              getRecordBusinessDate(record) !== operation.businessDate,
+          )
+        ) {
+          throw new Error(
+            `[${operation.establishmentName}] 저장 대상이 미리보기 이후 변경되었습니다.`,
+          );
+        }
+        if (collectionOperationAlreadyExists(targetRecords, operation.operationId)) {
+          skippedOperationIds.push(operation.operationId);
+          continue;
+        }
+
+        const { updates, error } = buildEstablishmentAdditionalCollectUpdates(
+          targetRecords,
+          {
+            method: operation.method,
+            additionalAmount: operation.amount,
+            depositorName: operation.depositorName,
+            operationId: operation.operationId,
+            collectedAt: Timestamp.fromDate(operation.collectedAt),
+          },
+        );
+        if (error) throw new Error(`[${operation.establishmentName}] ${error}`);
+
+        for (const update of updates) {
+          pendingUpdates.set(update.id, update.updates);
+          const existing = current.get(update.id);
+          if (existing) current.set(update.id, { ...existing, ...update.updates });
+        }
+        appliedOperationIds.push(operation.operationId);
+      }
+
+      pendingUpdates.forEach((updates, id) => {
+        transaction.update(
+          refs.get(id)!,
+          sanitizeForFirestore(updates),
+        );
+      });
+
+      return { appliedOperationIds, skippedOperationIds };
+    });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, COLLECTION_NAME);
   }
