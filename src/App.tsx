@@ -11,6 +11,7 @@ import React, {
   useSyncExternalStore,
   lazy,
   Suspense,
+  startTransition,
 } from "react";
 import {
   Plus,
@@ -87,6 +88,7 @@ import {
   addDispatch,
   updateDispatch,
   updateDispatchesAtomically,
+  applyBulkCollectionsAtomically,
   subscribeToDispatches,
   subscribeToAllUnpaidDispatches,
   subscribeToUnpaidStaffDispatches,
@@ -405,6 +407,9 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     return localStorage.getItem("office_auth") === "true";
   });
+  const [isPageVisible, setIsPageVisible] = useState(
+    () => typeof document === "undefined" || document.visibilityState !== "hidden",
+  );
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [_records, setRecords] = useState<DispatchRecord[]>([]);
@@ -839,9 +844,10 @@ export default function App() {
   }, [loading, isAuthenticated]);
 
   useEffect(() => {
+    if (!isPageVisible) return;
     const timer = setInterval(() => setCurrentTime(new Date()), 60000);
     return () => clearInterval(timer);
-  }, []);
+  }, [isPageVisible]);
 
   useEffect(() => {
     if (highlightedId) {
@@ -1895,16 +1901,18 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && isPageVisible) {
       setLoading(true);
       const unsubDispatches = subscribeToDispatches(
         selectedDate,
         (data) => {
           deferWhileCollectTyping("records", () => {
-            setRecords(data);
-            setLoading(false);
-            setInitErrorKind(null);
-            setInitError(null);
+            startTransition(() => {
+              setRecords(data);
+              setLoading(false);
+              setInitErrorKind(null);
+              setInitError(null);
+            });
           });
         },
         (err) => {
@@ -1916,12 +1924,14 @@ export default function App() {
         selectedDate,
         (data) => {
           deferWhileCollectTyping("attendance", () => {
-            setWorkingStaffIds(data.staffIds);
-            setOffStaffIds(data.offStaffIds);
-            setCheckInTimes(data.checkInTimes || {});
-            setOffTimes(data.offTimes || {});
-            setRawManualDailyProfits(data.manualDailyProfits || {});
-            setRawActiveChoices(data.activeChoices || {});
+            startTransition(() => {
+              setWorkingStaffIds(data.staffIds);
+              setOffStaffIds(data.offStaffIds);
+              setCheckInTimes(data.checkInTimes || {});
+              setOffTimes(data.offTimes || {});
+              setRawManualDailyProfits(data.manualDailyProfits || {});
+              setRawActiveChoices(data.activeChoices || {});
+            });
           });
         },
         (err) => {
@@ -1931,7 +1941,9 @@ export default function App() {
       const unsubBounced = subscribeToBouncedRecords(
         selectedDate,
         (data) => {
-          deferWhileCollectTyping("bounced", () => setBouncedRecords(data));
+          deferWhileCollectTyping("bounced", () =>
+            startTransition(() => setBouncedRecords(data)),
+          );
         },
         (err) => {
           handleSubscriptionError(err);
@@ -1953,7 +1965,7 @@ export default function App() {
         sunday,
         (data) => {
           deferWhileCollectTyping("weekly-attendance", () =>
-            setWeeklyAttendanceData(data),
+            startTransition(() => setWeeklyAttendanceData(data)),
           );
         },
         (err) => {
@@ -1967,13 +1979,15 @@ export default function App() {
         unsubWeeklyAttendance();
       };
     }
-  }, [isAuthenticated, selectedDate]);
+  }, [isAuthenticated, isPageVisible, selectedDate]);
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && isPageVisible) {
       const unsubAllUnpaid = subscribeToAllUnpaidDispatches(
         (data) => {
-          deferWhileCollectTyping("all-unpaid", () => setAllUnpaidRecords(data));
+          deferWhileCollectTyping("all-unpaid", () =>
+            startTransition(() => setAllUnpaidRecords(data)),
+          );
         },
         (err) => {
           handleSubscriptionError(err);
@@ -1982,7 +1996,7 @@ export default function App() {
       const unsubUnpaidStaff = subscribeToUnpaidStaffDispatches(
         (data) => {
           deferWhileCollectTyping("unpaid-staff", () =>
-            setUnpaidStaffRecords(data),
+            startTransition(() => setUnpaidStaffRecords(data)),
           );
         },
         (err) => {
@@ -1991,7 +2005,9 @@ export default function App() {
       );
       const unsubStaff = subscribeToStaff(
         (data) => {
-          deferWhileCollectTyping("staff", () => setStaff(data));
+          deferWhileCollectTyping("staff", () =>
+            startTransition(() => setStaff(data)),
+          );
         },
         (err) => {
           handleSubscriptionError(err);
@@ -1999,7 +2015,9 @@ export default function App() {
       );
       const unsubEstablishments = subscribeToEstablishments(
         (data) => {
-          deferWhileCollectTyping("establishments", () => setEstablishments(data));
+          deferWhileCollectTyping("establishments", () =>
+            startTransition(() => setEstablishments(data)),
+          );
         },
         (err) => {
           handleSubscriptionError(err);
@@ -2012,7 +2030,7 @@ export default function App() {
         unsubEstablishments();
       };
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, isPageVisible]);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -2061,11 +2079,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // 사용자가 탭으로 돌아왔을 때 (오랜 시간 방치 후 복귀 시) 자동 복구
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        // 앱 복귀 시 실시간 연결은 Firestore 리스너가 자동 유지
-      }
+      setIsPageVisible(document.visibilityState !== "hidden");
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -2074,6 +2089,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!isPageVisible) return;
     // 앱 활성 상태 유지를 위한 주기적 가벼운 핑 (60초마다)
     const pingServer = () => {
       fetch("/api/health").catch(() => {});
@@ -2081,7 +2097,7 @@ export default function App() {
 
     const keepAlive = setInterval(pingServer, 60000);
     return () => clearInterval(keepAlive);
-  }, []);
+  }, [isPageVisible]);
 
   const dailyCollectionSummary = useMemo(
     () => calculateDailyCollectionSummary(records),
@@ -4458,6 +4474,7 @@ export default function App() {
                           await updateDispatch(id, updates as any);
                         }}
                         onUpdateRecordsAtomically={updateDispatchesAtomically}
+                        onApplyBulkCollections={applyBulkCollectionsAtomically}
                         onEditRecord={(record) => setEditingRecord(record)}
                         onViewDispatchRecord={handleViewDispatchRecord}
                         focusRecordIds={pendingUnpaidRecordIds}
@@ -9582,7 +9599,7 @@ const DetailBreakdownModal = React.memo(function DetailBreakdownModal({
                             )}
                             {isUnder && (
                               <span className="whitespace-nowrap shrink-0 px-2 py-0.5 bg-red-500 text-white text-[11px] rounded-md font-black shadow-xs tracking-tight animate-pulse">
-                                미수 (덜 받음: -{diff.toLocaleString()}원)
+                                미수 (덜 받음: {calc.unpaidAmount.toLocaleString()}원)
                               </span>
                             )}
                             {isOver && (

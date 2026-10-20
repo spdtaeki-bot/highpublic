@@ -24,7 +24,8 @@ export const SAMPLE_STAFF_NAMES = [
 
 const DEPOSITORS = ["송한빈", "김민균", "정정희", "박혜창", "커피티씨"];
 
-export const SAMPLE_DAY_COUNT = 120;
+// 운영 화면과 비슷한 2,500건대 데이터로 입력/렌더 성능을 검증한다.
+export const SAMPLE_DAY_COUNT = 320;
 
 export function previewStamp(iso: string) {
   const date = new Date(iso);

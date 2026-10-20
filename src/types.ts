@@ -7,6 +7,8 @@ export interface CollectionHistoryEntry {
   amount?: number;
   paymentMethod?: PaymentMethod;
   depositorName?: string;
+  /** 일괄 수금 재시도/다중 탭 중복 저장을 식별하는 결정적 키 */
+  operationId?: string;
   note?: string; // e.g. "1차 수금", "2차 추가수금", "3차 추가수금"
   /**
    * true  = 이 기록(직원) 개인의 현장 수금. 업소 단위 일괄/추가수금에 의해 절대 변경되지 않는다.
