@@ -4,6 +4,7 @@ import path from "path";
 import { defineConfig } from "vite";
 
 const sampleDispatchService = path.resolve(__dirname, "src/preview/sampleDispatchService.ts");
+const firestoreShim = path.resolve(__dirname, "src/preview/firestoreShim.ts");
 
 /**
  * 샘플 데이터만 쓰는 미리보기 빌드.
@@ -14,7 +15,10 @@ export default defineConfig({
   publicDir: false,
   plugins: [react(), tailwindcss()],
   resolve: {
-    alias: [{ find: /.*services\/dispatchService$/, replacement: sampleDispatchService }],
+    alias: [
+      { find: "firebase/firestore", replacement: firestoreShim },
+      { find: /.*services\/dispatchService$/, replacement: sampleDispatchService },
+    ],
   },
   build: {
     outDir: "speed-preview-site",
