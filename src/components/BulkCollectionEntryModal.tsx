@@ -2,10 +2,13 @@ import React, { memo, useCallback, useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
 import { Plus, Trash2, X } from "lucide-react";
 import {
-  collectionOperationAlreadyExists,
   createBulkCollectionOperationId,
+  createBulkCollectionOverrideOperationId,
+  getCollectionOperationDuplicateStatus,
+  getRecentOperationDuplicateStatus,
   parseBulkAmount,
   parseBulkTime,
+  type BulkCollectionDuplicateStatus,
   type BulkCollectionOperation,
   type BulkCollectionSaveResult,
   type BulkCollectTarget,
@@ -28,6 +31,7 @@ function targetLabel(target: BulkCollectTarget) {
 
 interface PreviewItem {
   operation: BulkCollectionOperation;
+  duplicateStatus?: BulkCollectionDuplicateStatus;
   duplicateReason?: string;
 }
 
@@ -147,11 +151,13 @@ const BulkCollectionRow = memo(function BulkCollectionRow({
 function BulkCollectionEntryModalComponent({
   targets,
   defaultCollectedDate,
+  recentOperations = [],
   onSave,
   onClose,
 }: {
   targets: BulkCollectTarget[];
   defaultCollectedDate: string;
+  recentOperations?: BulkCollectionOperation[];
   onSave: (operations: BulkCollectionOperation[]) => Promise<BulkCollectionSaveResult>;
   onClose: () => void;
 }) {
@@ -165,6 +171,7 @@ function BulkCollectionEntryModalComponent({
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [result, setResult] = useState<BulkCollectionSaveResult | null>(null);
+  const previewToken = useRef("");
 
   useEffect(() => {
     markCollectInputActive();
@@ -203,6 +210,7 @@ function BulkCollectionEntryModalComponent({
     const data = new FormDataConstructor(form);
     const items: PreviewItem[] = [];
     const seenOperationIds = new Set<string>();
+    previewToken.current = `${Date.now()}-${Math.random()}`;
 
     for (const rowId of rowIds) {
       const targetKey = String(data.get(`target-${rowId}`) || "");
@@ -262,16 +270,33 @@ function BulkCollectionEntryModalComponent({
         method,
         collectedAt,
       };
+      let duplicateStatus: BulkCollectionDuplicateStatus | undefined;
       let duplicateReason: string | undefined;
       if (seenOperationIds.has(operationId)) {
+        duplicateStatus = "EXACT";
         duplicateReason = "입력 내용 안에서 앞 행과 중복";
-      } else if (
-        collectionOperationAlreadyExists(target.records, operationId, operation)
-      ) {
-        duplicateReason = "이미 저장된 수금";
+      } else {
+        const storedStatus = getCollectionOperationDuplicateStatus(
+          target.records,
+          operationId,
+          operation,
+        );
+        const recentStatus = getRecentOperationDuplicateStatus(
+          recentOperations,
+          operation,
+        );
+        duplicateStatus =
+          storedStatus === "EXACT" || recentStatus === "EXACT"
+            ? "EXACT"
+            : storedStatus || recentStatus || undefined;
+        if (duplicateStatus === "EXACT") {
+          duplicateReason = "완전히 같은 수금";
+        } else if (duplicateStatus === "SUSPECTED") {
+          duplicateReason = "같은 업소·날짜·금액·수단";
+        }
       }
       seenOperationIds.add(operationId);
-      items.push({ operation, duplicateReason });
+      items.push({ operation, duplicateStatus, duplicateReason });
     }
 
     if (items.length === 0) {
@@ -284,14 +309,28 @@ function BulkCollectionEntryModalComponent({
     setPreview(items);
   };
 
-  const save = async () => {
+  const save = async (mode: "EXCLUDE_WARNINGS" | "SAVE_ALL") => {
     if (!preview || isSaving) return;
-    const operations = preview
-      .filter((item) => !item.duplicateReason)
-      .map((item) => item.operation);
-    const duplicateIds = preview
-      .filter((item) => item.duplicateReason)
-      .map((item) => item.operation.operationId);
+    const warningItems = preview.filter((item) => item.duplicateStatus);
+    const operations = mode === "SAVE_ALL"
+      ? preview.map((item, index) =>
+          item.duplicateStatus
+            ? {
+                ...item.operation,
+                operationId: createBulkCollectionOverrideOperationId(
+                  item.operation.operationId,
+                  `${previewToken.current}-${index}`,
+                ),
+                duplicateOverride: true,
+              }
+            : item.operation,
+        )
+      : preview
+          .filter((item) => !item.duplicateStatus)
+          .map((item) => item.operation);
+    const duplicateIds = mode === "EXCLUDE_WARNINGS"
+      ? warningItems.map((item) => item.operation.operationId)
+      : [];
     if (operations.length === 0) {
       setError("모든 행이 중복입니다. 다시 입력에서 내용을 바꿔 주세요.");
       return;
@@ -315,6 +354,13 @@ function BulkCollectionEntryModalComponent({
       setIsSaving(false);
     }
   };
+
+  const exactCount =
+    preview?.filter((item) => item.duplicateStatus === "EXACT").length || 0;
+  const suspectedCount =
+    preview?.filter((item) => item.duplicateStatus === "SUSPECTED").length || 0;
+  const warningCount = exactCount + suspectedCount;
+  const saveableCount = (preview?.length || 0) - warningCount;
 
   return (
     <div
@@ -357,7 +403,7 @@ function BulkCollectionEntryModalComponent({
               <div className="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm font-black text-emerald-800">
                 {result.appliedOperationIds.length}건을 저장했습니다.
                 {result.skippedOperationIds.length > 0 &&
-                  ` 이미 저장된 ${result.skippedOperationIds.length}건은 중복 저장하지 않았습니다.`}
+                  ` 중복·의심 ${result.skippedOperationIds.length}건은 제외했습니다.`}
               </div>
               <button
                 type="button"
@@ -369,10 +415,10 @@ function BulkCollectionEntryModalComponent({
             </div>
           ) : preview ? (
             <div className="space-y-4" data-bulk-collection-preview>
-              {preview.some((item) => item.duplicateReason) && (
+              {warningCount > 0 && (
                 <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
-                  중복 {preview.filter((item) => item.duplicateReason).length}건을 아래에 표시했습니다.
-                  저장하면 중복 행만 제외합니다.
+                  완전 중복 {exactCount}건 · 중복 의심 {suspectedCount}건을 표시했습니다.
+                  제외 저장하거나 확인 후 전부 저장할 수 있습니다.
                 </div>
               )}
               <div className="overflow-x-auto rounded-2xl border border-stone-200">
@@ -388,20 +434,27 @@ function BulkCollectionEntryModalComponent({
                     </tr>
                   </thead>
                   <tbody>
-                    {preview.map(({ operation, duplicateReason }, index) => (
+                    {preview.map(({ operation, duplicateStatus, duplicateReason }, index) => (
                       <tr
                         key={`${operation.operationId}-${index}`}
                         className="border-t border-stone-100"
-                        data-bulk-preview-row={duplicateReason ? "duplicate" : "pending"}
+                        data-bulk-preview-row={
+                          duplicateStatus === "EXACT"
+                            ? "exact"
+                            : duplicateStatus === "SUSPECTED"
+                              ? "suspected"
+                              : "pending"
+                        }
                       >
                         <td className="px-3 py-2 font-black text-stone-900">
                           <span className="mr-1 text-stone-400">
                             {operation.businessDate.slice(5).replace("-", "/")}
                           </span>
                           {operation.establishmentName}
-                          {duplicateReason && (
+                          {duplicateStatus && (
                             <span className="mt-0.5 block text-[10px] text-red-700">
-                              중복 · {duplicateReason}
+                              {duplicateStatus === "EXACT" ? "완전 중복" : "중복 의심"} ·{" "}
+                              {duplicateReason}
                             </span>
                           )}
                         </td>
@@ -426,15 +479,15 @@ function BulkCollectionEntryModalComponent({
                 </table>
               </div>
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-950">
-                저장 대상 {preview.filter((item) => !item.duplicateReason).length}건 ·{" "}
+                기본 저장 대상 {saveableCount}건 ·{" "}
                 {preview
-                  .filter((item) => !item.duplicateReason)
+                  .filter((item) => !item.duplicateStatus)
                   .reduce((sum, item) => sum + item.operation.amount, 0)
                   .toLocaleString()}원
-                {preview.some((item) => item.duplicateReason) &&
-                  ` · 중복 제외 ${preview.filter((item) => item.duplicateReason).length}건`}
+                {warningCount > 0 &&
+                  ` · 중복·의심 ${warningCount}건`}
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={() => setPreview(null)}
@@ -445,17 +498,30 @@ function BulkCollectionEntryModalComponent({
                 </button>
                 <button
                   type="button"
-                  onClick={save}
-                  disabled={isSaving}
+                  onClick={() =>
+                    save(warningCount > 0 ? "EXCLUDE_WARNINGS" : "SAVE_ALL")
+                  }
+                  disabled={isSaving || (warningCount > 0 && saveableCount === 0)}
                   className="flex-[2] rounded-xl bg-amber-900 py-2.5 text-xs font-black text-white cursor-pointer disabled:opacity-50"
                   data-bulk-save
                 >
                   {isSaving
                     ? "한 번에 저장 중..."
-                    : preview.some((item) => item.duplicateReason)
-                      ? `중복 제외하고 ${preview.filter((item) => !item.duplicateReason).length}건 저장`
+                    : warningCount > 0
+                      ? `중복·의심 제외하고 ${saveableCount}건 저장`
                       : `${preview.length}건 한 번에 저장`}
                 </button>
+                {warningCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => save("SAVE_ALL")}
+                    disabled={isSaving}
+                    className="basis-full rounded-xl border border-amber-900 bg-white py-2.5 text-xs font-black text-amber-950 cursor-pointer disabled:opacity-50"
+                    data-bulk-save-all
+                  >
+                    그래도 {preview.length}건 전부 저장
+                  </button>
+                )}
               </div>
             </div>
           ) : (

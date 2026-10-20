@@ -5,6 +5,9 @@ import type { DispatchRecord } from "../types.ts";
 import {
   collectionOperationAlreadyExists,
   createBulkCollectionOperationId,
+  createBulkCollectionOverrideOperationId,
+  getCollectionOperationDuplicateStatus,
+  getRecentOperationDuplicateStatus,
   parseBulkAmount,
   parseBulkTime,
 } from "./bulkCollect.ts";
@@ -131,5 +134,32 @@ test("입금자가 비어 있고 operationId가 없어도 날짜·시간·금액
       { ...operation, collectedDate: "2026-10-16" },
     ),
     false,
+  );
+  assert.equal(
+    getCollectionOperationDuplicateStatus(
+      [existing],
+      operation.operationId,
+      { ...operation, time: "1408" },
+    ),
+    "SUSPECTED",
+  );
+  assert.equal(
+    getRecentOperationDuplicateStatus(
+      [operation],
+      {
+        ...operation,
+        operationId: createBulkCollectionOperationId({
+          ...operation,
+          time: "1408",
+        }),
+        time: "1408",
+        collectedAt: new Date(2026, 9, 15, 14, 8, 0, 0),
+      },
+    ),
+    "SUSPECTED",
+  );
+  assert.notEqual(
+    createBulkCollectionOverrideOperationId(operation.operationId, "first"),
+    createBulkCollectionOverrideOperationId(operation.operationId, "second"),
   );
 });

@@ -1053,10 +1053,14 @@ export const applyBulkCollectionsAtomically = async (
           );
         }
         if (
-          collectionOperationAlreadyExists(
-            targetRecords,
-            operation.operationId,
-            operation,
+          collectionOperationAlreadyExists(targetRecords, operation.operationId) ||
+          (
+            !operation.duplicateOverride &&
+            collectionOperationAlreadyExists(
+              targetRecords,
+              operation.operationId,
+              operation,
+            )
           )
         ) {
           skippedOperationIds.push(operation.operationId);

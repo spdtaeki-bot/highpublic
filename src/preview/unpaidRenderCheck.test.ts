@@ -198,7 +198,7 @@ test("일괄 저장 뒤 카드 순서와 드롭다운의 최신 잔여 금액을
   }
 });
 
-test("공란 입금자 중복 두 건을 표시하고 신규 한 건만 저장하며 날짜를 펼쳐 둔다", async () => {
+test("같은 화면에서 저장한 공란 입금자를 완전 중복·중복 의심으로 나누고 신규만 저장한다", async () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -283,13 +283,19 @@ test("공란 입금자 중복 두 건을 표시하고 신규 한 건만 저장�
     await act(async () => {
       fillRow(1, "리치");
       fillRow(2, "홍콩");
+      setValue(
+        host.querySelector<HTMLInputElement>('[aria-label="2행 시간"]')!,
+        "1350",
+      );
       fillRow(3, "도파민");
       host.querySelector<HTMLButtonElement>("[data-bulk-preview]")?.click();
     });
 
-    assert.equal(host.querySelectorAll('[data-bulk-preview-row="duplicate"]').length, 2);
+    assert.equal(host.querySelectorAll('[data-bulk-preview-row="exact"]').length, 1);
+    assert.equal(host.querySelectorAll('[data-bulk-preview-row="suspected"]').length, 1);
     assert.equal(host.querySelectorAll('[data-bulk-preview-row="pending"]').length, 1);
-    assert.match(host.textContent || "", /중복 제외하고 1건 저장/);
+    assert.match(host.textContent || "", /중복·의심 제외하고 1건 저장/);
+    assert.match(host.textContent || "", /그래도 3건 전부 저장/);
 
     await act(async () => {
       host.querySelector<HTMLButtonElement>("[data-bulk-save]")?.click();

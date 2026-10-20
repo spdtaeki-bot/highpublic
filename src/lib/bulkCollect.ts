@@ -20,12 +20,16 @@ export interface BulkCollectionOperation {
   time: string;
   method: Exclude<PaymentMethod, "UNPAID">;
   collectedAt: Date;
+  /** 중복 경고를 확인하고 전부 저장한 경우에만 true */
+  duplicateOverride?: boolean;
 }
 
 export interface BulkCollectionSaveResult {
   appliedOperationIds: string[];
   skippedOperationIds: string[];
 }
+
+export type BulkCollectionDuplicateStatus = "EXACT" | "SUSPECTED";
 
 function normalizeText(value: string) {
   return value.trim().replace(/\s+/g, " ");
@@ -65,6 +69,86 @@ export function createBulkCollectionOperationId(input: {
   return `bulk-${hash(canonical)}`;
 }
 
+function dateAndTime(raw: unknown) {
+  if (!raw) return null;
+  const value = raw as { toDate?: () => Date };
+  const collectedAt = value.toDate ? value.toDate() : new Date(raw as string | number | Date);
+  if (Number.isNaN(collectedAt.getTime())) return null;
+  return {
+    date: [
+      collectedAt.getFullYear(),
+      String(collectedAt.getMonth() + 1).padStart(2, "0"),
+      String(collectedAt.getDate()).padStart(2, "0"),
+    ].join("-"),
+    time: [
+      String(collectedAt.getHours()).padStart(2, "0"),
+      String(collectedAt.getMinutes()).padStart(2, "0"),
+    ].join(""),
+  };
+}
+
+export function getCollectionOperationDuplicateStatus(
+  records: DispatchRecord[],
+  operationId: string,
+  operation?: Pick<
+    BulkCollectionOperation,
+    "collectedDate" | "time" | "depositorName" | "amount" | "method"
+  >,
+): BulkCollectionDuplicateStatus | null {
+  let suspected = false;
+  for (const record of records) {
+    for (const entry of record.collectionHistory || []) {
+      if (entry.operationId === operationId) return "EXACT";
+      if (!operation || entry.isShared !== true) continue;
+      const collected = dateAndTime(entry.collectedAt);
+      if (
+        !collected ||
+        collected.date !== operation.collectedDate ||
+        (entry.amount || 0) !== operation.amount ||
+        entry.paymentMethod !== operation.method
+      ) {
+        continue;
+      }
+      if (
+        collected.time === operation.time &&
+        normalizeText(entry.depositorName || "").toLocaleLowerCase("ko") ===
+          normalizeText(operation.depositorName).toLocaleLowerCase("ko")
+      ) {
+        return "EXACT";
+      }
+      suspected = true;
+    }
+  }
+  return suspected ? "SUSPECTED" : null;
+}
+
+export function getRecentOperationDuplicateStatus(
+  existing: BulkCollectionOperation[],
+  operation: BulkCollectionOperation,
+): BulkCollectionDuplicateStatus | null {
+  let suspected = false;
+  for (const saved of existing) {
+    if (saved.targetKey !== operation.targetKey) continue;
+    if (saved.operationId === operation.operationId) return "EXACT";
+    if (
+      saved.collectedDate !== operation.collectedDate ||
+      saved.amount !== operation.amount ||
+      saved.method !== operation.method
+    ) {
+      continue;
+    }
+    if (
+      saved.time === operation.time &&
+      normalizeText(saved.depositorName).toLocaleLowerCase("ko") ===
+        normalizeText(operation.depositorName).toLocaleLowerCase("ko")
+    ) {
+      return "EXACT";
+    }
+    suspected = true;
+  }
+  return suspected ? "SUSPECTED" : null;
+}
+
 export function collectionOperationAlreadyExists(
   records: DispatchRecord[],
   operationId: string,
@@ -73,33 +157,14 @@ export function collectionOperationAlreadyExists(
     "collectedDate" | "time" | "depositorName" | "amount" | "method"
   >,
 ) {
-  return records.some((record) =>
-    record.collectionHistory?.some((entry) => {
-      if (entry.operationId === operationId) return true;
-      if (!operation || entry.isShared !== true || !entry.collectedAt) return false;
-      const collectedAt = entry.collectedAt.toDate
-        ? entry.collectedAt.toDate()
-        : new Date(entry.collectedAt);
-      if (Number.isNaN(collectedAt.getTime())) return false;
-      const entryDate = [
-        collectedAt.getFullYear(),
-        String(collectedAt.getMonth() + 1).padStart(2, "0"),
-        String(collectedAt.getDate()).padStart(2, "0"),
-      ].join("-");
-      const entryTime = [
-        String(collectedAt.getHours()).padStart(2, "0"),
-        String(collectedAt.getMinutes()).padStart(2, "0"),
-      ].join("");
-      return (
-        entryDate === operation.collectedDate &&
-        entryTime === operation.time &&
-        normalizeText(entry.depositorName || "").toLocaleLowerCase("ko") ===
-          normalizeText(operation.depositorName).toLocaleLowerCase("ko") &&
-        (entry.amount || 0) === operation.amount &&
-        entry.paymentMethod === operation.method
-      );
-    }),
-  );
+  return getCollectionOperationDuplicateStatus(records, operationId, operation) === "EXACT";
+}
+
+export function createBulkCollectionOverrideOperationId(
+  operationId: string,
+  overrideToken: string,
+) {
+  return `${operationId}-override-${hash(overrideToken)}`;
 }
 
 export function parseBulkAmount(value: string) {

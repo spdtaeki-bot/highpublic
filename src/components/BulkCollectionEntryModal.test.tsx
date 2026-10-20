@@ -323,9 +323,9 @@ test("중복 행을 모두 표시하고 중복이 아닌 행만 저장한다", a
       host.querySelector<HTMLButtonElement>("[data-bulk-preview]")?.click();
     });
 
-    assert.equal(host.querySelectorAll('[data-bulk-preview-row="duplicate"]').length, 1);
+    assert.equal(host.querySelectorAll('[data-bulk-preview-row="exact"]').length, 1);
     assert.equal(host.querySelectorAll('[data-bulk-preview-row="pending"]').length, 1);
-    assert.match(host.textContent || "", /중복 제외하고 1건 저장/);
+    assert.match(host.textContent || "", /중복·의심 제외하고 1건 저장/);
 
     await act(async () => {
       host.querySelector<HTMLButtonElement>("[data-bulk-save]")?.click();
@@ -333,7 +333,140 @@ test("중복 행을 모두 표시하고 중복이 아닌 행만 저장한다", a
     assert.equal(saved.length, 1);
     assert.equal(saved[0].length, 1);
     assert.equal(saved[0][0].establishmentName, "리치");
-    assert.match(host.textContent || "", /이미 저장된 1건은 중복 저장하지 않았습니다/);
+    assert.match(host.textContent || "", /중복·의심 1건은 제외했습니다/);
+  } finally {
+    act(() => root.unmount());
+    host.remove();
+  }
+});
+
+test("완전 중복과 시각이 다른 중복 의심을 구분하고 전부 저장할 수 있다", async () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const saved: BulkCollectionOperation[][] = [];
+  const collectedAt = (hour: number, minute: number) =>
+    Timestamp.fromDate(new Date(2026, 9, 15, hour, minute, 0, 0));
+  const existing = (
+    id: string,
+    establishmentName: string,
+    hour: number,
+    minute: number,
+  ): DispatchRecord => ({
+    ...record(),
+    id,
+    date: "2026-10-15",
+    establishmentName,
+    collectionHistory: [{
+      collectedAt: collectedAt(hour, minute),
+      amount: 10000,
+      paymentMethod: "TRANSFER",
+      isShared: true,
+    }],
+  });
+  const targets = [
+    {
+      key: "2026-10-15___리치",
+      businessDate: "2026-10-15",
+      establishmentName: "리치",
+      shortage: 140000,
+      records: [existing("rich", "리치", 14, 8)],
+    },
+    {
+      key: "2026-10-15___홈런",
+      businessDate: "2026-10-15",
+      establishmentName: "홈런",
+      shortage: 140000,
+      records: [{
+        ...record(),
+        id: "home-run",
+        date: "2026-10-15",
+        establishmentName: "홈런",
+      }],
+    },
+    {
+      key: "2026-10-15___도파민",
+      businessDate: "2026-10-15",
+      establishmentName: "도파민",
+      shortage: 150000,
+      records: [{
+        ...record(),
+        id: "dopamine",
+        date: "2026-10-15",
+        establishmentName: "도파민",
+      }],
+    },
+  ];
+
+  await act(async () => {
+    root.render(
+      <BulkCollectionEntryModal
+        targets={targets}
+        defaultCollectedDate="2026-10-15"
+        recentOperations={[{
+          operationId: createBulkCollectionOperationId({
+            targetKey: "2026-10-15___홈런",
+            collectedDate: "2026-10-15",
+            time: "1407",
+            depositorName: "",
+            amount: 10000,
+            method: "TRANSFER",
+          }),
+          targetKey: "2026-10-15___홈런",
+          businessDate: "2026-10-15",
+          collectedDate: "2026-10-15",
+          establishmentName: "홈런",
+          recordIds: ["home-run"],
+          depositorName: "",
+          amount: 10000,
+          time: "1407",
+          method: "TRANSFER",
+          collectedAt: new Date(2026, 9, 15, 14, 7, 0, 0),
+        }]}
+        onSave={async (operations) => {
+          saved.push(operations);
+          return {
+            appliedOperationIds: operations.map((operation) => operation.operationId),
+            skippedOperationIds: [],
+          };
+        }}
+        onClose={() => {}}
+      />,
+    );
+  });
+
+  try {
+    const fill = (row: number, target: string) => {
+      setValue(host.querySelector(`[aria-label="${row}행 업소"]`)!, target);
+      setValue(host.querySelector(`[aria-label="${row}행 금액"]`)!, "10000");
+      setValue(host.querySelector(`[aria-label="${row}행 시간"]`)!, "1408");
+    };
+    await act(async () => {
+      fill(1, "2026-10-15___리치");
+      fill(2, "2026-10-15___홈런");
+      fill(3, "2026-10-15___도파민");
+      host.querySelector<HTMLButtonElement>("[data-bulk-preview]")?.click();
+    });
+
+    assert.equal(host.querySelectorAll('[data-bulk-preview-row="exact"]').length, 1);
+    assert.equal(host.querySelectorAll('[data-bulk-preview-row="suspected"]').length, 1);
+    assert.equal(host.querySelectorAll('[data-bulk-preview-row="pending"]').length, 1);
+    assert.match(host.textContent || "", /완전 중복 1건 · 중복 의심 1건/);
+    assert.match(host.textContent || "", /중복·의심 제외하고 1건 저장/);
+    assert.match(host.textContent || "", /그래도 3건 전부 저장/);
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-bulk-save-all]")?.click();
+    });
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].length, 3);
+    assert.equal(saved[0].filter((operation) => operation.duplicateOverride).length, 2);
+    assert.equal(
+      saved[0]
+        .filter((operation) => operation.duplicateOverride)
+        .every((operation) => operation.operationId.includes("-override-")),
+      true,
+    );
   } finally {
     act(() => root.unmount());
     host.remove();

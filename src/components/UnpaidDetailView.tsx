@@ -477,6 +477,9 @@ export function UnpaidDetailView({
   const [isSavingEstablishmentMemo, setIsSavingEstablishmentMemo] =
     useState(false);
   const [collectPatches, setCollectPatches] = useState<RecordPatch[]>([]);
+  const [recentBulkOperations, setRecentBulkOperations] = useState<
+    BulkCollectionOperation[]
+  >([]);
   const additionalCollectLockRef = useRef(false);
   const establishmentOrderRef = useRef(
     new Map<string, Map<string, number>>(),
@@ -752,6 +755,10 @@ export function UnpaidDetailView({
       const saveResult = await onApplyBulkCollections(operations);
       const appliedIds = new Set(saveResult.appliedOperationIds);
       if (appliedIds.size === 0) return saveResult;
+      setRecentBulkOperations((current) => [
+        ...current,
+        ...operations.filter((operation) => appliedIds.has(operation.operationId)),
+      ].slice(-200));
 
       const currentById = new Map(
         combinedRecords.flatMap((record) =>
@@ -3197,6 +3204,7 @@ export function UnpaidDetailView({
         <BulkCollectionEntryModal
           targets={bulkCollectTargets}
           defaultCollectedDate={selectedDate}
+          recentOperations={recentBulkOperations}
           onSave={handleApplyBulkCollections}
           onClose={closeBulkCollection}
         />
