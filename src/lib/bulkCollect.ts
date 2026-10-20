@@ -12,6 +12,7 @@ export interface BulkCollectionOperation {
   operationId: string;
   targetKey: string;
   businessDate: string;
+  collectedDate: string;
   establishmentName: string;
   recordIds: string[];
   depositorName: string;

@@ -5,6 +5,7 @@ import React, {
   useDeferredValue,
   useRef,
   useSyncExternalStore,
+  useCallback,
 } from "react";
 import { format, parseISO } from "date-fns";
 import { ko } from "date-fns/locale";
@@ -455,6 +456,13 @@ export function UnpaidDetailView({
     method: PaymentMethod;
   } | null>(null);
   const [isBulkCollectionOpen, setIsBulkCollectionOpen] = useState(false);
+  const openBulkCollection = useCallback(() => {
+    setIsBulkCollectionOpen(true);
+  }, []);
+  const closeBulkCollection = useCallback(
+    () => setIsBulkCollectionOpen(false),
+    [],
+  );
 
   const [establishmentHistoryModal, setEstablishmentHistoryModal] = useState<{
     estName: string;
@@ -470,6 +478,9 @@ export function UnpaidDetailView({
     useState(false);
   const [collectPatches, setCollectPatches] = useState<RecordPatch[]>([]);
   const additionalCollectLockRef = useRef(false);
+  const establishmentOrderRef = useRef(
+    new Map<string, Map<string, number>>(),
+  );
 
   // Screenshot Capture State
   const [isCapturing, setIsCapturing] = useState<string | null>(null);
@@ -731,6 +742,55 @@ export function UnpaidDetailView({
     );
   }, [dateEstablishmentGroups]);
 
+  const handleApplyBulkCollections = useCallback(
+    async (operations: BulkCollectionOperation[]) => {
+      const saveResult = await onApplyBulkCollections(operations);
+      const appliedIds = new Set(saveResult.appliedOperationIds);
+      if (appliedIds.size === 0) return saveResult;
+
+      const currentById = new Map(
+        combinedRecords.flatMap((record) =>
+          record.id ? [[record.id, record] as const] : [],
+        ),
+      );
+      const optimisticById = new Map<string, RecordPatch>();
+
+      for (const operation of operations) {
+        if (!appliedIds.has(operation.operationId)) continue;
+        const targetRecords = operation.recordIds.flatMap((id) => {
+          const record = currentById.get(id);
+          return record ? [record] : [];
+        });
+        const { updates, error } = buildEstablishmentAdditionalCollectUpdates(
+          targetRecords,
+          {
+            method: operation.method,
+            additionalAmount: operation.amount,
+            depositorName: operation.depositorName,
+            operationId: operation.operationId,
+            collectedAt: Timestamp.fromDate(operation.collectedAt),
+          },
+        );
+        if (error) continue;
+        for (const patch of updates) {
+          optimisticById.set(patch.id, patch);
+          const current = currentById.get(patch.id);
+          if (current) currentById.set(patch.id, { ...current, ...patch.updates });
+        }
+      }
+
+      if (optimisticById.size > 0) {
+        setCollectPatches((current) => {
+          const merged = new Map(current.map((patch) => [patch.id, patch]));
+          optimisticById.forEach((patch, id) => merged.set(id, patch));
+          return Array.from(merged.values());
+        });
+      }
+      return saveResult;
+    },
+    [combinedRecords, onApplyBulkCollections],
+  );
+
   const activeBatchCollection = batchCollecting
     ? dateEstablishmentGroups[batchCollecting.dateKey]?.[
         batchCollecting.estName
@@ -874,6 +934,25 @@ export function UnpaidDetailView({
       if (filterMode === "PAST_ONLY" && isToday) return;
 
       const ests = dateEstablishmentGroups[date];
+      let stableOrder = establishmentOrderRef.current.get(date);
+      if (!stableOrder) {
+        stableOrder = new Map<string, number>();
+        establishmentOrderRef.current.set(date, stableOrder);
+      }
+      const namesByInitialOrder = Object.entries(ests)
+        .sort(([leftName, left], [rightName, right]) => {
+          if (left.unpaidAmount !== right.unpaidAmount) {
+            return right.unpaidAmount - left.unpaidAmount;
+          }
+          if (left.totalRequested !== right.totalRequested) {
+            return right.totalRequested - left.totalRequested;
+          }
+          return leftName.localeCompare(rightName, "ko");
+        })
+        .map(([name]) => name);
+      for (const name of namesByInitialOrder) {
+        if (!stableOrder.has(name)) stableOrder.set(name, stableOrder.size);
+      }
       const filteredEsts: Array<{
         estName: string;
         totalRequested: number;
@@ -919,13 +998,10 @@ export function UnpaidDetailView({
 
       if (filteredEsts.length > 0) {
         filteredEsts.sort((a, b) => {
-          if (a.unpaidAmount !== b.unpaidAmount) {
-            return b.unpaidAmount - a.unpaidAmount;
-          }
-          if (a.totalRequested !== b.totalRequested) {
-            return b.totalRequested - a.totalRequested;
-          }
-          return a.estName.localeCompare(b.estName);
+          const orderDiff =
+            (stableOrder?.get(a.estName) ?? Number.MAX_SAFE_INTEGER) -
+            (stableOrder?.get(b.estName) ?? Number.MAX_SAFE_INTEGER);
+          return orderDiff || a.estName.localeCompare(b.estName, "ko");
         });
 
         result.push([date, filteredEsts]);
@@ -1527,7 +1603,7 @@ export function UnpaidDetailView({
           <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
-              onClick={() => setIsBulkCollectionOpen(true)}
+              onClick={openBulkCollection}
               disabled={bulkCollectTargets.length === 0}
               className="px-3 py-2 bg-amber-900 hover:bg-amber-950 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap active:scale-95 disabled:opacity-40"
               data-open-bulk-collection
@@ -2099,7 +2175,7 @@ export function UnpaidDetailView({
                               )}
                               {isUnder && (
                                 <span className="whitespace-nowrap shrink-0 px-2.5 py-1 bg-red-600 text-white text-xs rounded-lg font-black shadow-xs animate-pulse">
-                                  미수 (덜 받음: -{diff.toLocaleString()}원)
+                                  미수 (덜 받음: {est.unpaidAmount.toLocaleString()}원)
                                 </span>
                               )}
                               {isOver && (
@@ -2525,6 +2601,7 @@ export function UnpaidDetailView({
       <AnimatePresence>
         {establishmentMemoModal && (
           <div
+            key="establishment-memo-modal"
             className="fixed inset-0 z-[95] flex items-center justify-center p-3 sm:p-4"
             data-html2canvas-ignore="true"
             data-capture-ignore="true"
@@ -2634,6 +2711,7 @@ export function UnpaidDetailView({
 
         {establishmentHistoryModal && (
           <div
+            key="establishment-history-modal"
             className="fixed inset-0 z-[90] flex items-center justify-center p-3 sm:p-4"
             data-html2canvas-ignore="true"
             data-capture-ignore="true"
@@ -2752,7 +2830,7 @@ export function UnpaidDetailView({
                                   : isPaid
                                     ? "수금완료"
                                     : isUnder
-                                      ? `부분미수 -${establishment.unpaidAmount.toLocaleString()}원`
+                                      ? `부분미수 ${establishment.unpaidAmount.toLocaleString()}원`
                                       : `미수 ${establishment.unpaidAmount.toLocaleString()}원`}
                               </span>
                             </div>
@@ -2932,6 +3010,7 @@ export function UnpaidDetailView({
 
         {batchCollecting && activeBatchCollection && (
           <div
+            key="batch-collection-modal"
             className="fixed inset-0 z-[90] flex items-center justify-center p-3 sm:p-4"
             data-html2canvas-ignore="true"
             data-capture-ignore="true"
@@ -3006,20 +3085,16 @@ export function UnpaidDetailView({
           </div>
         )}
 
-        {isBulkCollectionOpen && (
-          <BulkCollectionEntryModal
-            targets={bulkCollectTargets}
-            onSave={onApplyBulkCollections}
-            onClose={() => setIsBulkCollectionOpen(false)}
-          />
-        )}
-
         <AdditionalCollectionModal
+          key="additional-collection-modal"
           onCollect={handleAdditionalCollectRequest}
         />
 
         {confirmConfig && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div
+            key="confirmation-modal"
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+          >
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -3064,7 +3139,10 @@ export function UnpaidDetailView({
         )}
 
         {alertConfig && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div
+            key="alert-modal"
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+          >
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -3096,6 +3174,14 @@ export function UnpaidDetailView({
           </div>
         )}
       </AnimatePresence>
+      {isBulkCollectionOpen && (
+        <BulkCollectionEntryModal
+          targets={bulkCollectTargets}
+          defaultCollectedDate={selectedDate}
+          onSave={handleApplyBulkCollections}
+          onClose={closeBulkCollection}
+        />
+      )}
     </div>
   );
 }

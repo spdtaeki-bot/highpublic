@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { memo, useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
 import { Plus, Trash2, X } from "lucide-react";
 import {
@@ -10,6 +10,10 @@ import {
   type BulkCollectionSaveResult,
   type BulkCollectTarget,
 } from "../lib/bulkCollect";
+import {
+  markCollectInputActive,
+  markCollectInputIdle,
+} from "../lib/collectTypingGate";
 
 const fieldClass =
   "w-full min-w-0 rounded-xl border border-stone-300 bg-white px-2.5 py-2 text-xs font-bold text-stone-900 outline-none transition-all focus:border-amber-600 focus:ring-2 focus:ring-amber-200";
@@ -22,34 +26,161 @@ function targetLabel(target: BulkCollectTarget) {
   return `${target.businessDate.slice(5).replace("-", "/")} ${target.establishmentName} · 미수 ${target.shortage.toLocaleString()}원`;
 }
 
-export function BulkCollectionEntryModal({
+interface PreviewItem {
+  operation: BulkCollectionOperation;
+  duplicateReason?: string;
+}
+
+const BulkCollectionRow = memo(function BulkCollectionRow({
+  rowId,
+  index,
+  rowCount,
   targets,
+  defaultCollectedDate,
+  onRemove,
+}: {
+  rowId: number;
+  index: number;
+  rowCount: number;
+  targets: BulkCollectTarget[];
+  defaultCollectedDate: string;
+  onRemove: (rowId: number) => void;
+}) {
+  const isDepositorComposing = useRef(false);
+  const renderCount = useRef(0);
+  renderCount.current += 1;
+
+  return (
+    <div
+      className="grid grid-cols-2 gap-2 rounded-2xl border border-stone-200 bg-stone-50 p-2 sm:grid-cols-[minmax(150px,2fr)_118px_minmax(100px,1fr)_minmax(90px,1fr)_72px_78px_34px]"
+      data-bulk-row={index + 1}
+      data-bulk-row-renders={renderCount.current}
+    >
+      <select
+        name={`target-${rowId}`}
+        defaultValue=""
+        aria-label={`${index + 1}행 업소`}
+        className={`${fieldClass} col-span-2 sm:col-span-1`}
+      >
+        <option value="">업소 선택</option>
+        {targets.map((target) => (
+          <option key={target.key} value={target.key}>
+            {targetLabel(target)}
+          </option>
+        ))}
+      </select>
+      <input
+        type="date"
+        name={`date-${rowId}`}
+        aria-label={`${index + 1}행 날짜`}
+        defaultValue={defaultCollectedDate}
+        className={fieldClass}
+      />
+      <input
+        name={`depositor-${rowId}`}
+        aria-label={`${index + 1}행 입금자`}
+        autoComplete="off"
+        placeholder="입금자"
+        className={fieldClass}
+        onCompositionStart={(event) => {
+          isDepositorComposing.current = true;
+          event.currentTarget.dataset.composing = "true";
+        }}
+        onInput={(event) => {
+          if (isDepositorComposing.current || event.nativeEvent.isComposing) return;
+          event.currentTarget.dataset.committedValue = event.currentTarget.value;
+        }}
+        onCompositionEnd={(event) => {
+          isDepositorComposing.current = false;
+          delete event.currentTarget.dataset.composing;
+          event.currentTarget.dataset.committedValue = event.currentTarget.value;
+        }}
+      />
+      <input
+        name={`amount-${rowId}`}
+        aria-label={`${index + 1}행 금액`}
+        inputMode="numeric"
+        autoComplete="off"
+        placeholder="금액"
+        className={fieldClass}
+        onInput={(event) => {
+          const amount = parseBulkAmount(event.currentTarget.value);
+          event.currentTarget.value = amount ? amount.toLocaleString() : "";
+        }}
+      />
+      <input
+        name={`time-${rowId}`}
+        aria-label={`${index + 1}행 시간`}
+        inputMode="numeric"
+        autoComplete="off"
+        defaultValue={defaultTime()}
+        maxLength={4}
+        className={fieldClass}
+        onInput={(event) => {
+          event.currentTarget.value = event.currentTarget.value
+            .replace(/\D/g, "")
+            .slice(0, 4);
+        }}
+      />
+      <select
+        name={`method-${rowId}`}
+        aria-label={`${index + 1}행 방법`}
+        defaultValue="TRANSFER"
+        className={fieldClass}
+      >
+        <option value="TRANSFER">계좌</option>
+        <option value="CASH">현금</option>
+      </select>
+      <button
+        type="button"
+        aria-label={`${index + 1}행 삭제`}
+        disabled={rowCount === 1}
+        onClick={() => onRemove(rowId)}
+        className="flex items-center justify-center rounded-xl text-stone-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 cursor-pointer"
+      >
+        <Trash2 className="h-4 w-4" />
+      </button>
+    </div>
+  );
+});
+
+function BulkCollectionEntryModalComponent({
+  targets,
+  defaultCollectedDate,
   onSave,
   onClose,
 }: {
   targets: BulkCollectTarget[];
+  defaultCollectedDate: string;
   onSave: (operations: BulkCollectionOperation[]) => Promise<BulkCollectionSaveResult>;
   onClose: () => void;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
+  const renderCount = useRef(0);
+  renderCount.current += 1;
   const nextRowId = useRef(4);
   const [rowIds, setRowIds] = useState([1, 2, 3]);
-  const [preview, setPreview] = useState<BulkCollectionOperation[] | null>(null);
+  const [preview, setPreview] = useState<PreviewItem[] | null>(null);
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [result, setResult] = useState<BulkCollectionSaveResult | null>(null);
+
+  useEffect(() => {
+    markCollectInputActive();
+    return () => markCollectInputIdle();
+  }, []);
 
   const buildPreview = () => {
     const form = formRef.current;
     if (!form) return;
     const FormDataConstructor = form.ownerDocument.defaultView?.FormData ?? FormData;
     const data = new FormDataConstructor(form);
-    const now = new Date();
-    const collectedDate = format(now, "yyyy-MM-dd");
-    const operations: BulkCollectionOperation[] = [];
+    const items: PreviewItem[] = [];
+    const seenOperationIds = new Set<string>();
 
     for (const rowId of rowIds) {
       const targetKey = String(data.get(`target-${rowId}`) || "");
+      const collectedDate = String(data.get(`date-${rowId}`) || "");
       const depositorName = String(data.get(`depositor-${rowId}`) || "").trim();
       const amountRaw = String(data.get(`amount-${rowId}`) || "");
       const amount = parseBulkAmount(amountRaw);
@@ -64,6 +195,10 @@ export function BulkCollectionEntryModal({
         setError(`${rowIds.indexOf(rowId) + 1}행의 업소를 선택해 주세요.`);
         return;
       }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(collectedDate)) {
+        setError(`${rowIds.indexOf(rowId) + 1}행의 날짜를 선택해 주세요.`);
+        return;
+      }
       if (amount <= 0) {
         setError(`${rowIds.indexOf(rowId) + 1}행의 금액을 입력해 주세요.`);
         return;
@@ -73,7 +208,7 @@ export function BulkCollectionEntryModal({
         return;
       }
 
-      const collectedAt = new Date(now);
+      const collectedAt = new Date(`${collectedDate}T00:00:00`);
       collectedAt.setHours(
         Number.parseInt(time.slice(0, 2), 10),
         Number.parseInt(time.slice(2), 10),
@@ -88,10 +223,11 @@ export function BulkCollectionEntryModal({
         amount,
         method,
       });
-      operations.push({
+      const operation: BulkCollectionOperation = {
         operationId,
         targetKey,
         businessDate: target.businessDate,
+        collectedDate,
         establishmentName: target.establishmentName,
         recordIds: target.records.flatMap((record) => (record.id ? [record.id] : [])),
         depositorName,
@@ -99,41 +235,47 @@ export function BulkCollectionEntryModal({
         time,
         method,
         collectedAt,
-      });
+      };
+      let duplicateReason: string | undefined;
+      if (seenOperationIds.has(operationId)) {
+        duplicateReason = "입력 내용 안에서 앞 행과 중복";
+      } else if (collectionOperationAlreadyExists(target.records, operationId)) {
+        duplicateReason = "이미 저장된 수금";
+      }
+      seenOperationIds.add(operationId);
+      items.push({ operation, duplicateReason });
     }
 
-    if (operations.length === 0) {
+    if (items.length === 0) {
       setError("저장할 수금 내역을 한 줄 이상 입력해 주세요.");
-      return;
-    }
-    const operationIds = operations.map((operation) => operation.operationId);
-    if (new Set(operationIds).size !== operationIds.length) {
-      setError("같은 수금 내역이 두 줄 이상 있습니다. 중복 행을 지워 주세요.");
-      return;
-    }
-    const alreadySaved = operations.find((operation) => {
-      const target = targets.find((item) => item.key === operation.targetKey);
-      return target && collectionOperationAlreadyExists(target.records, operation.operationId);
-    });
-    if (alreadySaved) {
-      setError(
-        `${alreadySaved.establishmentName}의 같은 수금 내역이 이미 저장되어 있습니다.`,
-      );
       return;
     }
 
     setError("");
     setResult(null);
-    setPreview(operations);
+    setPreview(items);
   };
 
   const save = async () => {
     if (!preview || isSaving) return;
+    const operations = preview
+      .filter((item) => !item.duplicateReason)
+      .map((item) => item.operation);
+    const duplicateIds = preview
+      .filter((item) => item.duplicateReason)
+      .map((item) => item.operation.operationId);
+    if (operations.length === 0) {
+      setError("모든 행이 중복입니다. 다시 입력에서 내용을 바꿔 주세요.");
+      return;
+    }
     setIsSaving(true);
     setError("");
     try {
-      const nextResult = await onSave(preview);
-      setResult(nextResult);
+      const nextResult = await onSave(operations);
+      setResult({
+        appliedOperationIds: nextResult.appliedOperationIds,
+        skippedOperationIds: [...duplicateIds, ...nextResult.skippedOperationIds],
+      });
       setPreview(null);
     } catch (saveError) {
       setError(
@@ -150,6 +292,7 @@ export function BulkCollectionEntryModal({
     <div
       className="fixed inset-0 z-[95] flex items-center justify-center p-3 sm:p-4"
       data-bulk-collection-modal
+      data-bulk-modal-renders={renderCount.current}
     >
       <button
         type="button"
@@ -192,11 +335,18 @@ export function BulkCollectionEntryModal({
             </div>
           ) : preview ? (
             <div className="space-y-4" data-bulk-collection-preview>
+              {preview.some((item) => item.duplicateReason) && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
+                  중복 {preview.filter((item) => item.duplicateReason).length}건을 아래에 표시했습니다.
+                  저장하면 중복 행만 제외합니다.
+                </div>
+              )}
               <div className="overflow-x-auto rounded-2xl border border-stone-200">
-                <table className="w-full min-w-[720px] text-left text-xs">
+                <table className="w-full min-w-[800px] text-left text-xs">
                   <thead className="bg-stone-100 text-[10px] font-black text-stone-500">
                     <tr>
                       <th className="px-3 py-2">업소</th>
+                      <th className="px-3 py-2">날짜</th>
                       <th className="px-3 py-2">입금자</th>
                       <th className="px-3 py-2 text-right">금액</th>
                       <th className="px-3 py-2">시간</th>
@@ -204,13 +354,25 @@ export function BulkCollectionEntryModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {preview.map((operation) => (
-                      <tr key={operation.operationId} className="border-t border-stone-100">
+                    {preview.map(({ operation, duplicateReason }, index) => (
+                      <tr
+                        key={`${operation.operationId}-${index}`}
+                        className="border-t border-stone-100"
+                        data-bulk-preview-row={duplicateReason ? "duplicate" : "pending"}
+                      >
                         <td className="px-3 py-2 font-black text-stone-900">
                           <span className="mr-1 text-stone-400">
                             {operation.businessDate.slice(5).replace("-", "/")}
                           </span>
                           {operation.establishmentName}
+                          {duplicateReason && (
+                            <span className="mt-0.5 block text-[10px] text-red-700">
+                              중복 · {duplicateReason}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 font-bold">
+                          {operation.collectedDate.slice(5).replace("-", "/")}
                         </td>
                         <td className="px-3 py-2 font-bold">
                           {operation.depositorName || "-"}
@@ -230,8 +392,13 @@ export function BulkCollectionEntryModal({
                 </table>
               </div>
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-950">
-                총 {preview.length}건 ·{" "}
-                {preview.reduce((sum, operation) => sum + operation.amount, 0).toLocaleString()}원
+                저장 대상 {preview.filter((item) => !item.duplicateReason).length}건 ·{" "}
+                {preview
+                  .filter((item) => !item.duplicateReason)
+                  .reduce((sum, item) => sum + item.operation.amount, 0)
+                  .toLocaleString()}원
+                {preview.some((item) => item.duplicateReason) &&
+                  ` · 중복 제외 ${preview.filter((item) => item.duplicateReason).length}건`}
               </div>
               <div className="flex gap-2">
                 <button
@@ -249,14 +416,19 @@ export function BulkCollectionEntryModal({
                   className="flex-[2] rounded-xl bg-amber-900 py-2.5 text-xs font-black text-white cursor-pointer disabled:opacity-50"
                   data-bulk-save
                 >
-                  {isSaving ? "한 번에 저장 중..." : `${preview.length}건 한 번에 저장`}
+                  {isSaving
+                    ? "한 번에 저장 중..."
+                    : preview.some((item) => item.duplicateReason)
+                      ? `중복 제외하고 ${preview.filter((item) => !item.duplicateReason).length}건 저장`
+                      : `${preview.length}건 한 번에 저장`}
                 </button>
               </div>
             </div>
           ) : (
             <form ref={formRef} className="space-y-3" onSubmit={(event) => event.preventDefault()}>
-              <div className="hidden grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(100px,1fr)_80px_85px_34px] gap-2 px-1 text-[10px] font-black text-stone-500 sm:grid">
+              <div className="hidden grid-cols-[minmax(150px,2fr)_118px_minmax(100px,1fr)_minmax(90px,1fr)_72px_78px_34px] gap-2 px-1 text-[10px] font-black text-stone-500 sm:grid">
                 <span>업소</span>
+                <span>날짜</span>
                 <span>입금자</span>
                 <span>금액</span>
                 <span>시간</span>
@@ -264,76 +436,17 @@ export function BulkCollectionEntryModal({
                 <span />
               </div>
               {rowIds.map((rowId, index) => (
-                <div
+                <BulkCollectionRow
                   key={rowId}
-                  className="grid grid-cols-2 gap-2 rounded-2xl border border-stone-200 bg-stone-50 p-2 sm:grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(100px,1fr)_80px_85px_34px]"
-                  data-bulk-row={index + 1}
-                >
-                  <select
-                    name={`target-${rowId}`}
-                    defaultValue=""
-                    aria-label={`${index + 1}행 업소`}
-                    className={`${fieldClass} col-span-2 sm:col-span-1`}
-                  >
-                    <option value="">업소 선택</option>
-                    {targets.map((target) => (
-                      <option key={target.key} value={target.key}>
-                        {targetLabel(target)}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    name={`depositor-${rowId}`}
-                    aria-label={`${index + 1}행 입금자`}
-                    autoComplete="off"
-                    placeholder="입금자"
-                    className={fieldClass}
-                  />
-                  <input
-                    name={`amount-${rowId}`}
-                    aria-label={`${index + 1}행 금액`}
-                    inputMode="numeric"
-                    autoComplete="off"
-                    placeholder="금액"
-                    className={fieldClass}
-                    onInput={(event) => {
-                      const amount = parseBulkAmount(event.currentTarget.value);
-                      event.currentTarget.value = amount ? amount.toLocaleString() : "";
-                    }}
-                  />
-                  <input
-                    name={`time-${rowId}`}
-                    aria-label={`${index + 1}행 시간`}
-                    inputMode="numeric"
-                    autoComplete="off"
-                    defaultValue={defaultTime()}
-                    maxLength={4}
-                    className={fieldClass}
-                    onInput={(event) => {
-                      event.currentTarget.value = event.currentTarget.value
-                        .replace(/\D/g, "")
-                        .slice(0, 4);
-                    }}
-                  />
-                  <select
-                    name={`method-${rowId}`}
-                    aria-label={`${index + 1}행 방법`}
-                    defaultValue="TRANSFER"
-                    className={fieldClass}
-                  >
-                    <option value="TRANSFER">계좌</option>
-                    <option value="CASH">현금</option>
-                  </select>
-                  <button
-                    type="button"
-                    aria-label={`${index + 1}행 삭제`}
-                    disabled={rowIds.length === 1}
-                    onClick={() => setRowIds((current) => current.filter((id) => id !== rowId))}
-                    className="flex items-center justify-center rounded-xl text-stone-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 cursor-pointer"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
+                  rowId={rowId}
+                  index={index}
+                  rowCount={rowIds.length}
+                  targets={targets}
+                  defaultCollectedDate={defaultCollectedDate}
+                  onRemove={(id) =>
+                    setRowIds((current) => current.filter((item) => item !== id))
+                  }
+                />
               ))}
 
               <button
@@ -380,3 +493,5 @@ export function BulkCollectionEntryModal({
     </div>
   );
 }
+
+export const BulkCollectionEntryModal = memo(BulkCollectionEntryModalComponent);

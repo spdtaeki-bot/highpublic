@@ -9599,7 +9599,7 @@ const DetailBreakdownModal = React.memo(function DetailBreakdownModal({
                             )}
                             {isUnder && (
                               <span className="whitespace-nowrap shrink-0 px-2 py-0.5 bg-red-500 text-white text-[11px] rounded-md font-black shadow-xs tracking-tight animate-pulse">
-                                미수 (덜 받음: -{diff.toLocaleString()}원)
+                                미수 (덜 받음: {calc.unpaidAmount.toLocaleString()}원)
                               </span>
                             )}
                             {isOver && (
