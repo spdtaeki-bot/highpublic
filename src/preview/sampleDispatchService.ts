@@ -45,6 +45,17 @@ const establishmentListeners = new Set<() => void>();
 const attendanceListeners = new Set<() => void>();
 const bouncedListeners = new Set<() => void>();
 
+if (typeof window !== "undefined") {
+  (window as any).__HIGH_PUBLIC_PREVIEW_LISTENERS__ = () => ({
+    dispatch: dispatchListeners.size,
+    unpaid: unpaidListeners.size,
+    staff: staffListeners.size,
+    establishments: establishmentListeners.size,
+    attendance: attendanceListeners.size,
+    bounced: bouncedListeners.size,
+  });
+}
+
 function emitAll() {
   deferWhileCollectTyping("sample-updates", () => {
     dispatchListeners.forEach((listener) => listener());
