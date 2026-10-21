@@ -1,13 +1,12 @@
 import { deferWhileCollectTyping } from "../lib/collectTypingGate";
 import {
-  collectionOperationAlreadyExists,
+  commitBulkCollectionPlan,
+  commitBulkCollectRestore,
+  planBulkCollectionWrites,
+  type BulkCollectBackup,
   type BulkCollectionOperation,
   type BulkCollectionSaveResult,
 } from "../lib/bulkCollect";
-import {
-  buildEstablishmentAdditionalCollectUpdates,
-  getRecordBusinessDate,
-} from "../lib/utils";
 import type { ActiveChoice, BouncedRecord, DispatchRecord, Staff, StaffType } from "../types";
 import {
   buildSampleRecords,
@@ -262,62 +261,61 @@ export const updateDispatchesAtomically = async (
   emitAll();
 };
 
+const bulkCollectBackups = new Map<string, BulkCollectBackup>();
+
 export const applyBulkCollectionsAtomically = async (
   operations: BulkCollectionOperation[],
 ): Promise<BulkCollectionSaveResult> => {
-  const appliedOperationIds: string[] = [];
-  const skippedOperationIds: string[] = [];
-
-  for (const operation of operations) {
-    const targetRecords = operation.recordIds.flatMap((id) => {
+  const recordsById = new Map(
+    records.flatMap((record) => (record.id ? [[record.id, record] as const] : [])),
+  );
+  const createdAt = new Date();
+  const plan = planBulkCollectionWrites({
+    operations,
+    recordsById,
+    createdAt,
+    nonce: `${createdAt.getTime()}-preview`,
+    collectedAtFor: (operation) => previewStamp(operation.collectedAt.toISOString()),
+  });
+  commitBulkCollectionPlan(plan, {
+    setBackup: (backup) => {
+      bulkCollectBackups.set(backup.backupId, backup);
+    },
+    updateRecord: (id, updates) => {
       const record = records.find((item) => item.id === id);
-      return record ? [record] : [];
-    });
-    if (
-      targetRecords.length !== operation.recordIds.length ||
-      targetRecords.some(
-        (record) =>
-          record.establishmentName !== operation.establishmentName ||
-          getRecordBusinessDate(record) !== operation.businessDate,
-      )
-    ) {
-      throw new Error(`[${operation.establishmentName}] 저장 대상이 변경되었습니다.`);
-    }
-    if (
-      collectionOperationAlreadyExists(targetRecords, operation.operationId) ||
-      (
-        !operation.duplicateOverride &&
-        collectionOperationAlreadyExists(
-          targetRecords,
-          operation.operationId,
-          operation,
-        )
-      )
-    ) {
-      skippedOperationIds.push(operation.operationId);
-      continue;
-    }
-
-    const { updates, error } = buildEstablishmentAdditionalCollectUpdates(
-      targetRecords,
-      {
-        method: operation.method,
-        additionalAmount: operation.amount,
-        depositorName: operation.depositorName,
-        operationId: operation.operationId,
-        collectedAt: previewStamp(operation.collectedAt.toISOString()),
-      },
-    );
-    if (error) throw new Error(`[${operation.establishmentName}] ${error}`);
-    updates.forEach(({ id, updates: patch }) => {
-      const record = records.find((item) => item.id === id);
-      if (record) applyPatch(record as unknown as Record<string, unknown>, patch);
-    });
-    appliedOperationIds.push(operation.operationId);
-  }
-
+      if (record) {
+        applyPatch(
+          record as unknown as Record<string, unknown>,
+          updates as Record<string, unknown>,
+        );
+      }
+    },
+  });
   emitAll();
-  return { appliedOperationIds, skippedOperationIds };
+  return {
+    appliedOperationIds: plan.appliedOperationIds,
+    skippedOperationIds: plan.skippedOperationIds,
+    backup: plan.backup,
+  };
+};
+
+export const restoreBulkCollectionBackup = async (backupId: string) => {
+  const outcome = commitBulkCollectRestore(bulkCollectBackups.get(backupId), {
+    setRecord: (id, data) => {
+      const index = records.findIndex((record) => record.id === id);
+      if (index < 0) throw new Error("되돌릴 원본 기록을 찾지 못했습니다.");
+      records[index] = { ...data, id } as DispatchRecord;
+    },
+    markRestored: (restoredAt) => {
+      const backup = bulkCollectBackups.get(backupId);
+      if (backup) bulkCollectBackups.set(backupId, { ...backup, restoredAt });
+    },
+  });
+  if (outcome.error || !outcome.restored) {
+    throw new Error(outcome.error || "일괄 수금을 되돌리지 못했습니다.");
+  }
+  emitAll();
+  return outcome.restored;
 };
 
 export const payUnpaidDispatches = async (

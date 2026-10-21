@@ -25,12 +25,14 @@ import { deferWhileCollectTyping } from '../lib/collectTypingGate';
 import type {
   BulkCollectionOperation,
   BulkCollectionSaveResult,
+  BulkCollectBackup,
 } from '../lib/bulkCollect';
-import { collectionOperationAlreadyExists } from '../lib/bulkCollect';
 import {
-  buildEstablishmentAdditionalCollectUpdates,
-  getRecordBusinessDate,
-} from '../lib/utils';
+  BULK_COLLECT_BACKUP_COLLECTION,
+  commitBulkCollectionPlan,
+  commitBulkCollectRestore,
+  planBulkCollectionWrites,
+} from '../lib/bulkCollect';
 import { DispatchRecord, BouncedRecord, SYSTEM_RATES, COMMISSION_RATE, SystemType, StaffType, ActiveChoice } from '../types';
 
 const COLLECTION_NAME = 'dispatches';
@@ -1019,85 +1021,118 @@ export const applyBulkCollectionsAtomically = async (
       const snapshots = await Promise.all(
         recordIds.map((id) => transaction.get(refs.get(id)!)),
       );
-      const current = new Map<string, DispatchRecord>();
+      const recordsById = new Map<string, DispatchRecord>();
+      const rawById = new Map<string, Record<string, unknown>>();
       snapshots.forEach((snapshot, index) => {
         if (snapshot.exists()) {
-          current.set(
+          rawById.set(recordIds[index], snapshot.data() as Record<string, unknown>);
+          recordsById.set(
             recordIds[index],
             normalizeDispatchRecord(snapshot.id, snapshot.data()),
           );
         }
       });
 
-      const pendingUpdates = new Map<string, Partial<DispatchRecord>>();
-      const appliedOperationIds: string[] = [];
-      const skippedOperationIds: string[] = [];
-
-      for (const operation of operations) {
-        const targetRecords = operation.recordIds.flatMap((id) => {
-          const record = current.get(id);
-          return record ? [record] : [];
-        });
-        if (targetRecords.length !== operation.recordIds.length) {
-          throw new Error(`[${operation.establishmentName}] 저장할 원본 기록을 찾지 못했습니다.`);
-        }
-        if (
-          targetRecords.some(
-            (record) =>
-              record.establishmentName !== operation.establishmentName ||
-              getRecordBusinessDate(record) !== operation.businessDate,
-          )
-        ) {
-          throw new Error(
-            `[${operation.establishmentName}] 저장 대상이 미리보기 이후 변경되었습니다.`,
+      const createdAt = new Date();
+      const plan = planBulkCollectionWrites({
+        operations,
+        recordsById,
+        rawById,
+        createdAt,
+        nonce: `${createdAt.getTime()}-${Math.random()}`,
+        collectedAtFor: (operation) => Timestamp.fromDate(operation.collectedAt),
+      });
+      commitBulkCollectionPlan(plan, {
+        setBackup: (backup) => {
+          transaction.set(
+            doc(db, BULK_COLLECT_BACKUP_COLLECTION, backup.backupId),
+            sanitizeForFirestore({
+              backupId: backup.backupId,
+              createdAt: Timestamp.fromDate(createdAt),
+              createdAtIso: backup.createdAt,
+              operationIds: backup.operationIds,
+              documents: backup.documents,
+            }),
           );
-        }
-        if (
-          collectionOperationAlreadyExists(targetRecords, operation.operationId) ||
-          (
-            !operation.duplicateOverride &&
-            collectionOperationAlreadyExists(
-              targetRecords,
-              operation.operationId,
-              operation,
-            )
-          )
-        ) {
-          skippedOperationIds.push(operation.operationId);
-          continue;
-        }
-
-        const { updates, error } = buildEstablishmentAdditionalCollectUpdates(
-          targetRecords,
-          {
-            method: operation.method,
-            additionalAmount: operation.amount,
-            depositorName: operation.depositorName,
-            operationId: operation.operationId,
-            collectedAt: Timestamp.fromDate(operation.collectedAt),
-          },
-        );
-        if (error) throw new Error(`[${operation.establishmentName}] ${error}`);
-
-        for (const update of updates) {
-          pendingUpdates.set(update.id, update.updates);
-          const existing = current.get(update.id);
-          if (existing) current.set(update.id, { ...existing, ...update.updates });
-        }
-        appliedOperationIds.push(operation.operationId);
-      }
-
-      pendingUpdates.forEach((updates, id) => {
-        transaction.update(
-          refs.get(id)!,
-          sanitizeForFirestore(updates),
-        );
+        },
+        updateRecord: (id, updates) => {
+          const ref = refs.get(id);
+          if (!ref) throw new Error('저장할 원본 기록을 찾지 못했습니다.');
+          transaction.update(ref, sanitizeForFirestore(updates));
+        },
       });
 
-      return { appliedOperationIds, skippedOperationIds };
+      return {
+        appliedOperationIds: plan.appliedOperationIds,
+        skippedOperationIds: plan.skippedOperationIds,
+        backup: plan.backup,
+      };
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, COLLECTION_NAME);
+  }
+};
+
+function bulkCollectBackupFromStored(
+  id: string,
+  data: Record<string, any>,
+): BulkCollectBackup {
+  const createdAt = typeof data.createdAtIso === 'string'
+    ? data.createdAtIso
+    : data.createdAt?.toDate?.() instanceof Date
+      ? data.createdAt.toDate().toISOString()
+      : new Date().toISOString();
+  const restoredRaw = data.restoredAt?.toDate?.() instanceof Date
+    ? data.restoredAt.toDate().toISOString()
+    : typeof data.restoredAt === 'string'
+      ? data.restoredAt
+      : undefined;
+  return {
+    backupId: typeof data.backupId === 'string' ? data.backupId : id,
+    createdAt,
+    operationIds: Array.isArray(data.operationIds) ? data.operationIds : [],
+    documents: Array.isArray(data.documents) ? data.documents : [],
+    ...(restoredRaw ? { restoredAt: restoredRaw } : {}),
+  };
+}
+
+/** 백업에 넣어 둔 원본 문서로 일괄 수금을 되돌린다. 확인은 화면에서 받은 뒤 호출한다. */
+export const restoreBulkCollectionBackup = async (
+  backupId: string,
+): Promise<BulkCollectBackup> => {
+  if (!backupId) throw new Error('되돌릴 백업을 찾지 못했습니다.');
+  try {
+    return await runTransaction(db, async (transaction) => {
+      const backupRef = doc(db, BULK_COLLECT_BACKUP_COLLECTION, backupId);
+      const snapshot = await transaction.get(backupRef);
+      if (!snapshot.exists()) throw new Error('되돌릴 백업을 찾지 못했습니다.');
+      const backup = bulkCollectBackupFromStored(snapshot.id, snapshot.data());
+      const restoredAt = new Date();
+      const outcome = commitBulkCollectRestore(
+        backup,
+        {
+          setRecord: (id, data) => {
+            transaction.set(
+              doc(db, COLLECTION_NAME, id),
+              sanitizeForFirestore(data),
+            );
+          },
+          markRestored: (restoredAtIso) => {
+            transaction.update(backupRef, {
+              restoredAt: Timestamp.fromDate(new Date(restoredAtIso)),
+            });
+          },
+        },
+        restoredAt,
+      );
+      if (outcome.error || !outcome.restored) {
+        throw new Error(outcome.error || '일괄 수금을 되돌리지 못했습니다.');
+      }
+      return outcome.restored;
+    });
+  } catch (error) {
+    if (error instanceof Error && !('code' in error)) throw error;
+    handleFirestoreError(error, OperationType.UPDATE, BULK_COLLECT_BACKUP_COLLECTION);
   }
 };
 

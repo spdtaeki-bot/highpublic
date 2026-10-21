@@ -1,18 +1,27 @@
-import React, { memo, useCallback, useEffect, useRef, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { Plus, Trash2, X } from "lucide-react";
 import {
+  annotateBulkCollectionOverpayments,
+  downloadBulkCollectBackup,
+  formatBulkOverpaymentWarning,
+  formatManWon,
+  projectBulkCollectionUnpaidTotals,
   createBulkCollectionOperationId,
   createBulkCollectionOverrideOperationId,
   getCollectionOperationDuplicateStatus,
   getRecentOperationDuplicateStatus,
   parseBulkAmount,
   parseBulkTime,
+  type AnnotatedBulkOverpayment,
+  type BulkCollectBackup,
   type BulkCollectionDuplicateStatus,
   type BulkCollectionOperation,
   type BulkCollectionSaveResult,
   type BulkCollectTarget,
+  type BulkUnpaidGroup,
 } from "../lib/bulkCollect";
+import { calculateEstablishmentCollection } from "../lib/utils";
 import {
   markCollectInputActive,
   markCollectInputIdle,
@@ -33,6 +42,7 @@ interface PreviewItem {
   operation: BulkCollectionOperation;
   duplicateStatus?: BulkCollectionDuplicateStatus;
   duplicateReason?: string;
+  overpayment?: AnnotatedBulkOverpayment;
 }
 
 const BulkCollectionRow = memo(function BulkCollectionRow({
@@ -150,15 +160,20 @@ const BulkCollectionRow = memo(function BulkCollectionRow({
 
 function BulkCollectionEntryModalComponent({
   targets,
+  groups,
   defaultCollectedDate,
   recentOperations = [],
   onSave,
+  onRestore,
   onClose,
 }: {
   targets: BulkCollectTarget[];
+  /** 총미수금 화면과 같은 업소·날짜 묶음. 없으면 미수 대상만으로 합계를 낸다. */
+  groups?: BulkUnpaidGroup[];
   defaultCollectedDate: string;
   recentOperations?: BulkCollectionOperation[];
   onSave: (operations: BulkCollectionOperation[]) => Promise<BulkCollectionSaveResult>;
+  onRestore?: (backup: BulkCollectBackup) => Promise<void>;
   onClose: () => void;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
@@ -171,6 +186,8 @@ function BulkCollectionEntryModalComponent({
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [result, setResult] = useState<BulkCollectionSaveResult | null>(null);
+  const [overpayConfirmed, setOverpayConfirmed] = useState(false);
+  const [undoState, setUndoState] = useState<"idle" | "confirm" | "working" | "done">("idle");
   const previewToken = useRef("");
 
   useEffect(() => {
@@ -304,13 +321,34 @@ function BulkCollectionEntryModalComponent({
       return;
     }
 
+    const annotated = annotateBulkCollectionOverpayments(
+      items.map((item) => ({
+        ...item,
+        targetKey: item.operation.targetKey,
+        amount: item.operation.amount,
+        outstanding: calculateEstablishmentCollection(
+          targets.find((target) => target.key === item.operation.targetKey)?.records || [],
+        ).unpaidAmount,
+        excludedFromDefaultSave: Boolean(item.duplicateStatus),
+      })),
+    );
+
     setError("");
     setResult(null);
-    setPreview(items);
+    setOverpayConfirmed(false);
+    setUndoState("idle");
+    setPreview(annotated);
   };
 
   const save = async (mode: "EXCLUDE_WARNINGS" | "SAVE_ALL") => {
     if (!preview || isSaving) return;
+    const needsOverpayConfirm = mode === "SAVE_ALL"
+      ? preview.some((item) => item.overpayment)
+      : preview.some((item) => item.overpayment && !item.overpayment.onlySaveAll);
+    if (needsOverpayConfirm && !overpayConfirmed) {
+      setError("초과 입금을 확인한 뒤 저장해 주세요. 금액은 줄이지 않습니다.");
+      return;
+    }
     const warningItems = preview.filter((item) => item.duplicateStatus);
     const operations = mode === "SAVE_ALL"
       ? preview.map((item, index) =>
@@ -342,7 +380,9 @@ function BulkCollectionEntryModalComponent({
       setResult({
         appliedOperationIds: nextResult.appliedOperationIds,
         skippedOperationIds: [...duplicateIds, ...nextResult.skippedOperationIds],
+        backup: nextResult.backup,
       });
+      setUndoState("idle");
       setPreview(null);
     } catch (saveError) {
       setError(
@@ -361,6 +401,56 @@ function BulkCollectionEntryModalComponent({
     preview?.filter((item) => item.duplicateStatus === "SUSPECTED").length || 0;
   const warningCount = exactCount + suspectedCount;
   const saveableCount = (preview?.length || 0) - warningCount;
+  const overpayCount = preview?.filter((item) => item.overpayment).length || 0;
+  const defaultNeedsOverpayConfirm = preview?.some(
+    (item) => item.overpayment && !item.overpayment.onlySaveAll,
+  ) || false;
+  const saveAllNeedsOverpayConfirm = overpayCount > 0;
+  const primaryMode = warningCount > 0 ? "EXCLUDE_WARNINGS" : "SAVE_ALL";
+  const primaryNeedsOverpayConfirm = primaryMode === "SAVE_ALL"
+    ? saveAllNeedsOverpayConfirm
+    : defaultNeedsOverpayConfirm;
+  const totalGroups = groups && groups.length > 0
+    ? groups
+    : targets.map((target) => ({
+        key: target.key,
+        businessDate: target.businessDate,
+        establishmentName: target.establishmentName,
+        records: target.records,
+      }));
+  const unpaidTotals = useMemo(() => {
+    if (!preview) return null;
+    const primaryOperations = primaryMode === "SAVE_ALL"
+      ? preview.map((item) => item.operation)
+      : preview.filter((item) => !item.duplicateStatus).map((item) => item.operation);
+    const saved = projectBulkCollectionUnpaidTotals(totalGroups, primaryOperations);
+    const all = projectBulkCollectionUnpaidTotals(
+      totalGroups,
+      preview.map((item) => item.operation),
+    );
+    return { saved, all };
+  }, [preview, primaryMode, totalGroups]);
+
+  const restoreBackup = async () => {
+    if (!result?.backup || undoState === "working" || undoState === "done") return;
+    if (!onRestore) {
+      setError("되돌리기를 사용할 수 없습니다.");
+      return;
+    }
+    setUndoState("working");
+    setError("");
+    try {
+      await onRestore(result.backup);
+      setUndoState("done");
+    } catch (restoreError) {
+      setUndoState("confirm");
+      setError(
+        restoreError instanceof Error
+          ? restoreError.message
+          : "일괄 수금을 되돌리는 중 오류가 발생했습니다.",
+      );
+    }
+  };
 
   return (
     <div
@@ -401,10 +491,67 @@ function BulkCollectionEntryModalComponent({
           {result ? (
             <div className="space-y-4" data-bulk-save-result>
               <div className="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm font-black text-emerald-800">
-                {result.appliedOperationIds.length}건을 저장했습니다.
-                {result.skippedOperationIds.length > 0 &&
+                {undoState === "done"
+                  ? "일괄 수금을 되돌렸습니다. 저장 직전 문서로 복구했습니다."
+                  : `${result.appliedOperationIds.length}건을 저장했습니다.`}
+                {undoState !== "done" && result.skippedOperationIds.length > 0 &&
                   ` 중복·의심 ${result.skippedOperationIds.length}건은 제외했습니다.`}
+                {undoState !== "done" && result.backup && " 저장 직전 원본을 백업했습니다."}
               </div>
+              {result.backup && undoState !== "done" && (
+                <div className="space-y-2 rounded-2xl border border-stone-200 bg-stone-50 p-3" data-bulk-backup-panel>
+                  <p className="text-xs font-bold text-stone-600">
+                    백업 시각 {result.backup.createdAt.replace("T", " ").slice(0, 19)} · 원본 {result.backup.documents.length}건
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => downloadBulkCollectBackup(result.backup!)}
+                      className="rounded-xl border border-stone-300 bg-white px-3 py-2 text-xs font-black text-stone-800 cursor-pointer"
+                      data-bulk-download-backup
+                    >
+                      백업 JSON 내려받기
+                    </button>
+                    {undoState === "idle" && (
+                      <button
+                        type="button"
+                        onClick={() => setUndoState("confirm")}
+                        className="rounded-xl border border-red-300 bg-white px-3 py-2 text-xs font-black text-red-700 cursor-pointer"
+                        data-bulk-undo
+                      >
+                        이 일괄 수금 되돌리기
+                      </button>
+                    )}
+                  </div>
+                  {undoState === "confirm" || undoState === "working" ? (
+                    <div className="rounded-xl border border-red-200 bg-red-50 p-3" data-bulk-undo-confirm>
+                      <p className="text-xs font-bold leading-relaxed text-red-900">
+                        저장 직전 문서로 되돌립니다. 그 뒤에 같은 기록을 고쳤다면 그 내용도 함께 되돌아갑니다.
+                      </p>
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setUndoState("idle")}
+                          disabled={undoState === "working"}
+                          className="flex-1 rounded-xl border border-stone-300 bg-white py-2 text-xs font-black text-stone-700 cursor-pointer"
+                          data-bulk-undo-cancel
+                        >
+                          취소
+                        </button>
+                        <button
+                          type="button"
+                          onClick={restoreBackup}
+                          disabled={undoState === "working"}
+                          className="flex-1 rounded-xl bg-red-700 py-2 text-xs font-black text-white cursor-pointer disabled:opacity-50"
+                          data-bulk-undo-commit
+                        >
+                          {undoState === "working" ? "되돌리는 중..." : "되돌리기"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              )}
               <button
                 type="button"
                 onClick={onClose}
@@ -434,7 +581,7 @@ function BulkCollectionEntryModalComponent({
                     </tr>
                   </thead>
                   <tbody>
-                    {preview.map(({ operation, duplicateStatus, duplicateReason }, index) => (
+                    {preview.map(({ operation, duplicateStatus, duplicateReason, overpayment }, index) => (
                       <tr
                         key={`${operation.operationId}-${index}`}
                         className="border-t border-stone-100"
@@ -455,6 +602,21 @@ function BulkCollectionEntryModalComponent({
                             <span className="mt-0.5 block text-[10px] text-red-700">
                               {duplicateStatus === "EXACT" ? "완전 중복" : "중복 의심"} ·{" "}
                               {duplicateReason}
+                            </span>
+                          )}
+                          {overpayment && (
+                            <span className="mt-0.5 block text-[10px] font-black text-orange-800" data-bulk-overpay={overpayment.excess}>
+                              {overpayment.onlySaveAll ? "전부 저장 시 " : ""}
+                              {formatBulkOverpaymentWarning({
+                                establishmentName: operation.establishmentName,
+                                businessDate: operation.businessDate,
+                                outstanding: overpayment.outstanding,
+                                amount: operation.amount,
+                                excess: overpayment.excess,
+                              })}
+                              {!overpayment.onlySaveAll &&
+                                overpayment.saveAllExcess !== overpayment.excess &&
+                                ` · 전부 저장 시 ${formatManWon(overpayment.saveAllExcess)} 초과`}
                             </span>
                           )}
                         </td>
@@ -487,6 +649,63 @@ function BulkCollectionEntryModalComponent({
                 {warningCount > 0 &&
                   ` · 중복·의심 ${warningCount}건`}
               </div>
+              {unpaidTotals && (
+                <div
+                  className="space-y-2 rounded-2xl border border-stone-200 bg-white p-3"
+                  data-bulk-unpaid-totals
+                >
+                  <p className="text-[11px] font-black text-stone-500">
+                    총미수금 변화 · 총미수금 화면과 같은 계산
+                  </p>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm font-black text-stone-900">
+                    <span data-bulk-unpaid-before>
+                      저장 전 총미수금 {unpaidTotals.saved.beforeTotal.toLocaleString()}원
+                    </span>
+                    <span data-bulk-unpaid-after>
+                      저장 후 총미수금 {unpaidTotals.saved.afterTotal.toLocaleString()}원
+                    </span>
+                  </div>
+                  {unpaidTotals.all.afterTotal !== unpaidTotals.saved.afterTotal && (
+                    <p className="text-[11px] font-bold text-stone-600" data-bulk-unpaid-after-all>
+                      전부 저장 시 총미수금 {unpaidTotals.all.afterTotal.toLocaleString()}원
+                    </p>
+                  )}
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-black text-stone-400">업소별 변동</p>
+                    {unpaidTotals.saved.changes.length === 0 ? (
+                      <p className="text-xs font-bold text-stone-500">저장되는 수금이 없어 총미수금은 그대로입니다.</p>
+                    ) : (
+                      unpaidTotals.saved.changes.map((change) => (
+                        <p
+                          key={change.key}
+                          className="text-xs font-bold text-stone-800"
+                          data-bulk-unpaid-change={change.key}
+                        >
+                          {change.businessDate.slice(5).replace("-", "/")} {change.establishmentName}{" "}
+                          {change.before.toLocaleString()}원 → {change.after.toLocaleString()}원
+                        </p>
+                      ))
+                    )}
+                  </div>
+                  {unpaidTotals.saved.error && (
+                    <p className="text-xs font-black text-red-700">{unpaidTotals.saved.error}</p>
+                  )}
+                </div>
+              )}
+              {overpayCount > 0 && (
+                <label className="flex items-start gap-2 rounded-xl border border-orange-300 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-950">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={overpayConfirmed}
+                    onChange={(event) => setOverpayConfirmed(event.target.checked)}
+                    data-bulk-overpay-confirm
+                  />
+                  <span>
+                    초과 입금을 확인했습니다. 금액을 줄이지 않고 그대로 저장합니다.
+                  </span>
+                </label>
+              )}
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -498,10 +717,12 @@ function BulkCollectionEntryModalComponent({
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    save(warningCount > 0 ? "EXCLUDE_WARNINGS" : "SAVE_ALL")
+                  onClick={() => save(primaryMode)}
+                  disabled={
+                    isSaving ||
+                    (warningCount > 0 && saveableCount === 0) ||
+                    (primaryNeedsOverpayConfirm && !overpayConfirmed)
                   }
-                  disabled={isSaving || (warningCount > 0 && saveableCount === 0)}
                   className="flex-[2] rounded-xl bg-amber-900 py-2.5 text-xs font-black text-white cursor-pointer disabled:opacity-50"
                   data-bulk-save
                 >
@@ -515,7 +736,7 @@ function BulkCollectionEntryModalComponent({
                   <button
                     type="button"
                     onClick={() => save("SAVE_ALL")}
-                    disabled={isSaving}
+                    disabled={isSaving || (saveAllNeedsOverpayConfirm && !overpayConfirmed)}
                     className="basis-full rounded-xl border border-amber-900 bg-white py-2.5 text-xs font-black text-amber-950 cursor-pointer disabled:opacity-50"
                     data-bulk-save-all
                   >

@@ -472,3 +472,151 @@ test("완전 중복과 시각이 다른 중복 의심을 구분하고 전부 저
     host.remove();
   }
 });
+
+test("미수를 넘는 입금은 경고하고 확인 후에만 금액을 줄이지 않고 저장한다", async () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const saved: BulkCollectionOperation[][] = [];
+  const restored: string[] = [];
+  const luxury = { ...record(), id: "luxury", establishmentName: "명품", totalAmount: 150000 };
+  const rich = { ...record(), id: "rich", establishmentName: "리치", totalAmount: 200000 };
+  const paid = {
+    ...record(),
+    id: "paid",
+    establishmentName: "완납",
+    totalAmount: 100000,
+    paymentMethod: "TRANSFER" as const,
+  };
+
+  await act(async () => {
+    root.render(
+      <BulkCollectionEntryModal
+        targets={[
+          {
+            key: "2026-10-20___명품",
+            businessDate: "2026-10-20",
+            establishmentName: "명품",
+            shortage: 150000,
+            records: [luxury],
+          },
+          {
+            key: "2026-10-20___리치",
+            businessDate: "2026-10-20",
+            establishmentName: "리치",
+            shortage: 200000,
+            records: [rich],
+          },
+        ]}
+        groups={[
+          {
+            key: "2026-10-20___명품",
+            businessDate: "2026-10-20",
+            establishmentName: "명품",
+            records: [luxury],
+          },
+          {
+            key: "2026-10-20___리치",
+            businessDate: "2026-10-20",
+            establishmentName: "리치",
+            records: [rich],
+          },
+          {
+            key: "2026-10-20___완납",
+            businessDate: "2026-10-20",
+            establishmentName: "완납",
+            records: [paid],
+          },
+        ]}
+        defaultCollectedDate="2026-10-20"
+        onSave={async (operations) => {
+          saved.push(operations);
+          return {
+            appliedOperationIds: operations.map((operation) => operation.operationId),
+            skippedOperationIds: [],
+            backup: {
+              backupId: "bulk-backup-ui",
+              createdAt: "2026-10-21T04:05:06.000Z",
+              operationIds: operations.map((operation) => operation.operationId),
+              documents: [{ id: "luxury", data: { paymentMethod: "UNPAID", establishmentName: "명품" } }],
+            },
+          };
+        }}
+        onRestore={async (backup) => {
+          restored.push(backup.backupId);
+        }}
+        onClose={() => {}}
+      />,
+    );
+  });
+
+  try {
+    await act(async () => {
+      setValue(host.querySelector('[aria-label="1행 업소"]')!, "2026-10-20___명품");
+      setValue(host.querySelector('[aria-label="1행 입금자"]')!, "김민수");
+      setValue(host.querySelector('[aria-label="1행 금액"]')!, "175000");
+      setValue(host.querySelector('[aria-label="1행 시간"]')!, "1931");
+      host.querySelector<HTMLButtonElement>("[data-bulk-preview]")?.click();
+    });
+
+    assert.match(host.textContent || "", /명품 10\/20 미수 15만, 입금 17\.5만 · 2\.5만 초과/);
+    assert.match(host.textContent || "", /175,000원/);
+    assert.equal(
+      host.querySelector("[data-bulk-unpaid-before]")?.textContent,
+      "저장 전 총미수금 350,000원",
+    );
+    assert.equal(
+      host.querySelector("[data-bulk-unpaid-after]")?.textContent,
+      "저장 후 총미수금 200,000원",
+    );
+    assert.match(
+      host.querySelector("[data-bulk-unpaid-change='2026-10-20___명품']")?.textContent || "",
+      /10\/20 명품 150,000원 → 0원/,
+    );
+    assert.equal(
+      host.querySelector("[data-bulk-unpaid-change='2026-10-20___리치']"),
+      null,
+    );
+    const saveButton = host.querySelector<HTMLButtonElement>("[data-bulk-save]");
+    assert.equal(saveButton?.disabled, true);
+
+    await act(async () => {
+      saveButton?.click();
+    });
+    assert.equal(saved.length, 0);
+
+    await act(async () => {
+      host.querySelector<HTMLInputElement>("[data-bulk-overpay-confirm]")?.click();
+    });
+    assert.equal(host.querySelector<HTMLButtonElement>("[data-bulk-save]")?.disabled, false);
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-bulk-save]")?.click();
+    });
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0][0].amount, 175000);
+    assert.match(host.textContent || "", /저장 직전 원본을 백업했습니다/);
+    assert.ok(host.querySelector("[data-bulk-download-backup]"));
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-bulk-undo]")?.click();
+    });
+    assert.ok(host.querySelector("[data-bulk-undo-confirm]"));
+    assert.equal(restored.length, 0);
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-bulk-undo-cancel]")?.click();
+    });
+    assert.equal(host.querySelector("[data-bulk-undo-confirm]"), null);
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-bulk-undo]")?.click();
+    });
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-bulk-undo-commit]")?.click();
+    });
+    assert.deepEqual(restored, ["bulk-backup-ui"]);
+    assert.match(host.textContent || "", /저장 직전 문서로 복구했습니다/);
+  } finally {
+    act(() => root.unmount());
+    host.remove();
+  }
+});
