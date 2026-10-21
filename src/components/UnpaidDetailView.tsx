@@ -54,10 +54,14 @@ import {
   overlayRecordPatches,
   type RecordPatch,
 } from "../lib/optimisticCollect";
-import type {
-  BulkCollectionOperation,
-  BulkCollectionSaveResult,
-  BulkCollectTarget,
+import {
+  bulkCollectRestorePatch,
+  downloadBulkCollectBackup,
+  type BulkCollectBackup,
+  type BulkCollectionOperation,
+  type BulkCollectionSaveResult,
+  type BulkCollectTarget,
+  type BulkUnpaidGroup,
 } from "../lib/bulkCollect";
 
 interface AdditionalCollectionRequest {
@@ -396,6 +400,7 @@ interface UnpaidDetailViewProps {
   onApplyBulkCollections: (
     operations: BulkCollectionOperation[],
   ) => Promise<BulkCollectionSaveResult>;
+  onRestoreBulkCollection?: (backupId: string) => Promise<void>;
   onEditRecord?: (record: DispatchRecord) => void;
   onViewDispatchRecord?: (record: DispatchRecord) => void;
   focusRecordIds?: string[] | null;
@@ -410,6 +415,7 @@ export function UnpaidDetailView({
   onUpdateRecord,
   onUpdateRecordsAtomically,
   onApplyBulkCollections,
+  onRestoreBulkCollection,
   onEditRecord,
   onViewDispatchRecord,
   focusRecordIds,
@@ -480,6 +486,11 @@ export function UnpaidDetailView({
   const [recentBulkOperations, setRecentBulkOperations] = useState<
     BulkCollectionOperation[]
   >([]);
+  const [pendingBulkBackup, setPendingBulkBackup] = useState<BulkCollectBackup | null>(
+    null,
+  );
+  const [bannerUndoConfirm, setBannerUndoConfirm] = useState(false);
+  const [isRestoringBulkBackup, setIsRestoringBulkBackup] = useState(false);
   const additionalCollectLockRef = useRef(false);
   const establishmentOrderRef = useRef(
     new Map<string, Map<string, number>>(),
@@ -753,6 +764,10 @@ export function UnpaidDetailView({
           .filter((date) => expandedDates[date] ?? allExpanded),
       );
       const saveResult = await onApplyBulkCollections(operations);
+      if (saveResult.backup) {
+        setPendingBulkBackup(saveResult.backup);
+        setBannerUndoConfirm(false);
+      }
       const appliedIds = new Set(saveResult.appliedOperationIds);
       if (appliedIds.size === 0) return saveResult;
       setRecentBulkOperations((current) => [
@@ -815,6 +830,48 @@ export function UnpaidDetailView({
       expandedDates,
       onApplyBulkCollections,
     ],
+  );
+
+  const bulkCollectGroups = useMemo(() => {
+    const groups: BulkUnpaidGroup[] = [];
+    Object.entries(dateEstablishmentGroups).forEach(([businessDate, establishments]) => {
+      Object.entries(establishments).forEach(([establishmentName, establishment]) => {
+        groups.push({
+          key: `${businessDate}___${establishmentName}`,
+          businessDate,
+          establishmentName,
+          records: establishment.records,
+        });
+      });
+    });
+    return groups;
+  }, [dateEstablishmentGroups]);
+
+  const restoreBulkBackup = useCallback(
+    async (backup: BulkCollectBackup) => {
+      if (!onRestoreBulkCollection) {
+        throw new Error("되돌리기를 사용할 수 없습니다.");
+      }
+      setIsRestoringBulkBackup(true);
+      try {
+        await onRestoreBulkCollection(backup.backupId);
+        setPendingBulkBackup({ ...backup, restoredAt: new Date().toISOString() });
+        setBannerUndoConfirm(false);
+        setCollectPatches((current) => {
+          const merged = new Map(current.map((patch) => [patch.id, patch]));
+          for (const document of backup.documents) {
+            merged.set(document.id, {
+              id: document.id,
+              updates: bulkCollectRestorePatch(document.data),
+            });
+          }
+          return Array.from(merged.values());
+        });
+      } finally {
+        setIsRestoringBulkBackup(false);
+      }
+    },
+    [onRestoreBulkCollection],
   );
 
   const activeBatchCollection = batchCollecting
@@ -1655,6 +1712,70 @@ export function UnpaidDetailView({
             </button>
           </div>
         </div>
+
+        {pendingBulkBackup && !pendingBulkBackup.restoredAt && !isBulkCollectionOpen && (
+          <div
+            className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5"
+            data-bulk-backup-banner
+          >
+            <p className="text-xs font-black text-stone-800">
+              방금 저장한 일괄 수금의 원본 {pendingBulkBackup.documents.length}건을 백업해 두었습니다.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => downloadBulkCollectBackup(pendingBulkBackup)}
+                className="rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-[11px] font-black text-stone-800 cursor-pointer"
+                data-bulk-banner-download
+              >
+                백업 JSON 내려받기
+              </button>
+              <button
+                type="button"
+                onClick={() => setBannerUndoConfirm(true)}
+                className="rounded-xl border border-red-300 bg-white px-3 py-1.5 text-[11px] font-black text-red-700 cursor-pointer"
+                data-bulk-banner-undo
+              >
+                되돌리기
+              </button>
+            </div>
+            {bannerUndoConfirm && (
+              <div className="mt-2 rounded-xl border border-red-200 bg-red-50 p-3" data-bulk-banner-undo-confirm>
+                <p className="text-xs font-bold leading-relaxed text-red-900">
+                  저장 직전 문서로 되돌립니다. 그 뒤에 같은 기록을 고쳤다면 그 내용도 함께 되돌아갑니다.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBannerUndoConfirm(false)}
+                    disabled={isRestoringBulkBackup}
+                    className="flex-1 rounded-xl border border-stone-300 bg-white py-2 text-xs font-black text-stone-700 cursor-pointer"
+                    data-bulk-banner-undo-cancel
+                  >
+                    취소
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void restoreBulkBackup(pendingBulkBackup).catch((restoreError) => {
+                        setAlertConfig({
+                          message: restoreError instanceof Error
+                            ? restoreError.message
+                            : "일괄 수금을 되돌리는 중 오류가 발생했습니다.",
+                        });
+                      });
+                    }}
+                    disabled={isRestoringBulkBackup}
+                    className="flex-1 rounded-xl bg-red-700 py-2 text-xs font-black text-white cursor-pointer disabled:opacity-50"
+                    data-bulk-banner-undo-commit
+                  >
+                    {isRestoringBulkBackup ? "되돌리는 중..." : "되돌리기"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Filter Pills */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
@@ -3203,9 +3324,11 @@ export function UnpaidDetailView({
       {isBulkCollectionOpen && (
         <BulkCollectionEntryModal
           targets={bulkCollectTargets}
+          groups={bulkCollectGroups}
           defaultCollectedDate={selectedDate}
           recentOperations={recentBulkOperations}
           onSave={handleApplyBulkCollections}
+          onRestore={restoreBulkBackup}
           onClose={closeBulkCollection}
         />
       )}

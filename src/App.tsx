@@ -89,6 +89,7 @@ import {
   updateDispatch,
   updateDispatchesAtomically,
   applyBulkCollectionsAtomically,
+  restoreBulkCollectionBackup,
   subscribeToDispatches,
   subscribeToAllUnpaidDispatches,
   subscribeToUnpaidStaffDispatches,
@@ -4477,6 +4478,9 @@ export default function App() {
                         }}
                         onUpdateRecordsAtomically={updateDispatchesAtomically}
                         onApplyBulkCollections={applyBulkCollectionsAtomically}
+                        onRestoreBulkCollection={async (backupId) => {
+                          await restoreBulkCollectionBackup(backupId);
+                        }}
                         onEditRecord={(record) => setEditingRecord(record)}
                         onViewDispatchRecord={handleViewDispatchRecord}
                         focusRecordIds={pendingUnpaidRecordIds}
